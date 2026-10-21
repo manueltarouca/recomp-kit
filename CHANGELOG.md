@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep 250 ms of streamed QMixer audio queued ahead of each voice
+  (`RECOMP_QMIX_LEAD_MS`), so a long guest frame no longer lets a stream run
+  dry with an audible gap.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.

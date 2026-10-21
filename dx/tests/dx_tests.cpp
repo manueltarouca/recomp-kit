@@ -10180,6 +10180,25 @@ static void test_qmixer_frame_pump() {
         qmixer_frame_pump(&g_cpu);
     CHECK_EQ(g_fp_calls, settled);
 
+    // With a time-based lead the pump keeps that much audio in front of the
+    // voice, so a frame that runs long does not drain it: 250 ms at 11025 Hz
+    // stereo 16-bit is 11025 bytes, eleven chunks. One pump pulls at most
+    // eight, so the next tops up the rest, and the one after has nothing to do.
+    os_setenv("RECOMP_QMIX_LEAD_MS", "250");
+    qmixer_gate_reset_for_test();
+    g_queued_bytes = 0;
+    g_voice_remaining = 0;
+    uint32_t lead_calls = g_fp_calls;
+    qmixer_frame_pump(&g_cpu);
+    CHECK_EQ(g_fp_calls - lead_calls, 8u);
+    qmixer_frame_pump(&g_cpu);
+    CHECK_EQ(g_fp_calls - lead_calls, 11u);
+    CHECK(g_voice_remaining >= 11025u);
+    qmixer_frame_pump(&g_cpu);
+    CHECK_EQ(g_fp_calls - lead_calls, 11u);
+    os_setenv("RECOMP_QMIX_LEAD_MS", "0");
+    qmixer_gate_reset_for_test();
+
     // The frame pump is re-entrant-safe: the callback it ends in is guest code
     // and guest code reaches the message loop.
     CHECK_EQ(call_shim(tramp("QMIXER.dll", "QSWaveMixStopChannel"), {hmix, 0, 0}), 0u);
@@ -12631,6 +12650,9 @@ int main() {
     mem_init();
     imports_init();
     dx_register_shims();
+    // The QMixer tests below pin the one-chunk refill threshold; the time-based
+    // stream lead has its own checks in the frame pump test.
+    os_setenv("RECOMP_QMIX_LEAD_MS", "0");
 
     g_stack_top = STACK_TOP - 0x1000;
     g_scratch = heap_alloc(0x4000, true, 16);
