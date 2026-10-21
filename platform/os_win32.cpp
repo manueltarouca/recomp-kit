@@ -529,6 +529,9 @@ int os_install_fault_handlers(OsFaultFn fn) {
     SetUnhandledExceptionFilter(fault_filter);
     return 1;
 }
+int os_fault_backtrace_available() {
+    return 0;
+}
 void os_write_stderr_raw(const char *s, size_t n) {
     DWORD written = 0;
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), s, (DWORD)n, &written, nullptr);
