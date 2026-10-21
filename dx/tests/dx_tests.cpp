@@ -2441,6 +2441,40 @@ static void test_presenter_seal_hook_and_retirement_queue() {
     host_frame_release(flip_frame);
 }
 
+// A 2D screen shown while a device exists (the loading screen before the level
+// selector) repaints the whole on-screen target and draws nothing. That frame
+// is presented whole; a draw later in the frame makes it a clear before 3D.
+static void test_full_repaint_without_draws_is_legacy() {
+    rec_reset();
+    reset_ddraw_for_test();
+    uint32_t dd = rec_dd();
+    call_method(dd, DD_SetDisplayMode, {640, 480, 16});
+    uint32_t primary = make_primary_chain_for_test();
+    uint32_t sp = make_offscreen_for_test(640, 480, 16);
+    CHECK(primary != 0 && sp != 0);
+    if (!primary || !sp)
+        return;
+    fill_for_test(sp, 1);
+    reset_ddraw_for_test();
+    ddraw_note_device(1);
+
+    // Part of the screen only: still gameplay with HUD pieces.
+    blt_for_test(primary, sp, 0, 0, 320, 240, 0);
+    HostFrameHandle f = host_frame_current();
+    CHECK_EQ((uint32_t)host_frame_class(f), (uint32_t)HOST_SCREEN_GAMEPLAY);
+    CHECK(!host_frame_legacy(f));
+
+    // The whole screen and no draw: presented whole.
+    blt_for_test(primary, sp, 0, 0, 640, 480, 0);
+    CHECK(host_frame_legacy(f));
+    CHECK_EQ(host_legacy_fallback_count(), 0u); // not the sticky interleave fallback
+
+    // A draw after it: that was a clear before 3D.
+    ddraw_note_draw();
+    CHECK(!host_frame_legacy(f));
+    ddraw_note_device(0);
+}
+
 static void test_screen_class() {
     rec_reset();
     uint32_t rt = make_render_target_for_test(640, 480, 8);
@@ -12700,6 +12734,7 @@ int main() {
         {"first HUD/overlay", test_first_hud_boundary_and_overlay_pass},
         {"overlay mapping", test_overlay_mapping_rule},
         {"interleave fallback", test_inexpressible_interleave_triggers_legacy_replay},
+        {"full repaint without draws", test_full_repaint_without_draws_is_legacy},
         {"scene/HUD intersection", test_later_scene_overlay_intersects_hud},
         {"HUD exclusions/groups", test_hud_rule_exclusions_and_grouping},
         {"projected UI containment", test_transformed_overlay_containment},
