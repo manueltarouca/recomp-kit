@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Reuse retired Vulkan textures, upload staging buffers and replay
+  checkpoint buffers instead of allocating new ones per texture revision,
+  and read back through cached host memory. Texture-heavy scenes no longer
+  stall the guest in the driver's allocator. The presenter paces repeats of
+  an unchanged frame to the display refresh and reuses composite targets.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.
