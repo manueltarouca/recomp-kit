@@ -129,6 +129,7 @@ class VulkanDevice final : public Device {
         VkDeviceMemory memory = VK_NULL_HANDLE;
         void *map = nullptr;
         uint64_t bytes = 0;
+        bool spare = false; // upload staging: return to spare_bufs_ when retired
     };
     struct Binding {
         VkBuffer buffer = VK_NULL_HANDLE;
@@ -286,6 +287,14 @@ class VulkanDevice final : public Device {
     // Submitted and not yet retired, in submission order (the reaper's queue).
     std::deque<Submission> submitted_;
     std::vector<Grave> graves_;
+    // Retired textures kept for reuse by create_texture (mutex_ held); see recycle().
+    std::deque<Tex> spare_textures_;
+    uint64_t spare_bytes_ = 0;
+    void recycle(Tex &t); // mutex_ held
+    // Retired upload staging buffers, power-of-two sized (mutex_ held).
+    std::deque<Buf> spare_bufs_;
+    uint64_t spare_buf_bytes_ = 0;
+    void recycle(Buf &b);                                 // mutex_ held
     std::unordered_map<uint64_t, CommandStatus> retired_; // bounded: last 1024
     std::deque<uint64_t> retired_order_;
     std::condition_variable reaper_cv_, retired_cv_;
