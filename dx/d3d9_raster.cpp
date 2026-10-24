@@ -247,6 +247,7 @@ struct Machine {
     V4 a0;
     V4 opos, ofog, od[2], ot[8], oc[4];
     bool killed = false;
+    float m3x2_u = 0; // texm3x2pad's u, for the texm3x2tex after it
 
     V4 constant(uint32_t i) const {
         auto d = p->defs.find(i);
@@ -622,6 +623,23 @@ struct Machine {
                     o = texture_op(in.dst.index, tex[in.dst.index & 7]);
                 }
                 break;
+            case OP_TEXM3X2PAD: {
+                V4 a = read(s[0]);
+                const V4 &t = tex[in.dst.index & 7]; // still this stage's coordinate
+                m3x2_u = a[0] * t[0] + a[1] * t[1] + a[2] * t[2];
+                continue;
+            }
+            case OP_TEXM3X2TEX: {
+                V4 a = read(s[0]);
+                const V4 &t = tex[in.dst.index & 7];
+                V4 uv;
+                uv[0] = m3x2_u;
+                uv[1] = a[0] * t[0] + a[1] * t[1] + a[2] * t[2];
+                uv[2] = 0;
+                uv[3] = 1;
+                o = texture_op(in.dst.index, uv);
+                break;
+            }
             case OP_TEXDP3: {
                 V4 a = read(s[0]);
                 V4 t = tex[in.dst.index & 7];

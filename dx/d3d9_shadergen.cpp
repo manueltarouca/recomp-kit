@@ -783,6 +783,20 @@ struct Gen {
                     (wgsl() ? "{ break; }\n" : "break;\n");
             return;
         }
+        case OP_TEXM3X2PAD: { // u = dot(texcoord[dst].xyz, src.rgb), kept for the next
+            char buf[96];
+            snprintf(buf, sizeof buf, "%s m3x2u_%u = dot(tc[%u].xyz, ", wgsl() ? "let" : "float",
+                     in.dst.index & 7, in.dst.index & 7);
+            body += indent() + buf + "(" + S(0) + ").xyz);\n";
+            return;
+        }
+        case OP_TEXM3X2TEX: { // v likewise; stage dst sampled at (u, v)
+            uint32_t n = in.dst.index & 7;
+            char buf[96];
+            snprintf(buf, sizeof buf, "(m3x2u_%u, dot(tc[%u].xyz, ", n ? n - 1 : 0, n);
+            write(in.dst, sample(n, F4 + buf + "(" + S(0) + ").xyz), 0.0, 1.0)", false, false));
+            return;
+        }
         case OP_TEXDP3: {
             char buf[48];
             snprintf(buf, sizeof buf, "t[%u]", in.dst.index & 7);
@@ -955,7 +969,7 @@ bool pixel_source(const Program &p, const PixelVariant &v, std::string *out, std
 uint32_t pixel_sampler_mask(const Program &p) {
     uint32_t mask = 0;
     for (const Inst &in : p.code)
-        if (in.op == OP_TEX || in.op == OP_TEXLDL) {
+        if (in.op == OP_TEX || in.op == OP_TEXLDL || in.op == OP_TEXM3X2TEX) {
             if (p.major >= 2)
                 mask |= 1u << (in.src[1].index & 15);
             else

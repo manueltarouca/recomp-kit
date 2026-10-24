@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Draw ps.1.x `texm3x2pad`/`texm3x2tex` in the shader decoder, the CPU
+  interpreter and the generated MSL/GLSL/WGSL, and bind the stage that
+  `texm3x2tex` samples: the sampler mask counted only `tex`/`texldl`, so on
+  Metal it sampled black. Fixes #20.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.
