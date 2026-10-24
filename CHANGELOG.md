@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Register `CLSID_DirectSound8` and `IID_IDirectSound8` (IDirectSound plus
+  `VerifyCertification`) over the existing DirectSound object. A game that
+  made its DirectSound through `CoCreateInstance` with them ran without
+  sound. Fixes #22.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.
