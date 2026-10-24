@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Enumerate the keyboard's keys in `IDirectInputDevice::EnumObjects`. It
+  returned success without calling back, so a game that sizes its key table
+  from the enumeration ignored every key. Fixes #13.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.

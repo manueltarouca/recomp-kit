@@ -276,15 +276,165 @@ void Device_GetCapabilities(X86 *c) {
     com_ret(c, DI_OK);
 }
 
-// EnumObjects(callback, ref, dwFlags). Only the joystick lists its objects;
-// the mouse and keyboard keep the old silent success.
+// EnumObjects(callback, ref, dwFlags): the joystick's and the keyboard's
+// objects; the mouse keeps the old silent success.
+// The keys a standard 101-key keyboard has, by DIK code, and their names.
+struct KeyObject {
+    uint8_t code;
+    const char *name;
+};
+const KeyObject kKeyboardKeys[] = {
+    {0x01, "Esc"},
+    {0x02, "1"},
+    {0x03, "2"},
+    {0x04, "3"},
+    {0x05, "4"},
+    {0x06, "5"},
+    {0x07, "6"},
+    {0x08, "7"},
+    {0x09, "8"},
+    {0x0A, "9"},
+    {0x0B, "0"},
+    {0x0C, "-"},
+    {0x0D, "="},
+    {0x0E, "Backspace"},
+    {0x0F, "Tab"},
+    {0x10, "Q"},
+    {0x11, "W"},
+    {0x12, "E"},
+    {0x13, "R"},
+    {0x14, "T"},
+    {0x15, "Y"},
+    {0x16, "U"},
+    {0x17, "I"},
+    {0x18, "O"},
+    {0x19, "P"},
+    {0x1A, "["},
+    {0x1B, "]"},
+    {0x1C, "Enter"},
+    {0x1D, "Ctrl"},
+    {0x1E, "A"},
+    {0x1F, "S"},
+    {0x20, "D"},
+    {0x21, "F"},
+    {0x22, "G"},
+    {0x23, "H"},
+    {0x24, "J"},
+    {0x25, "K"},
+    {0x26, "L"},
+    {0x27, ";"},
+    {0x28, "'"},
+    {0x29, "`"},
+    {0x2A, "Shift"},
+    {0x2B, "\\"},
+    {0x2C, "Z"},
+    {0x2D, "X"},
+    {0x2E, "C"},
+    {0x2F, "V"},
+    {0x30, "B"},
+    {0x31, "N"},
+    {0x32, "M"},
+    {0x33, ","},
+    {0x34, "."},
+    {0x35, "/"},
+    {0x36, "Right Shift"},
+    {0x37, "Num *"},
+    {0x38, "Alt"},
+    {0x39, "Space"},
+    {0x3A, "Caps Lock"},
+    {0x3B, "F1"},
+    {0x3C, "F2"},
+    {0x3D, "F3"},
+    {0x3E, "F4"},
+    {0x3F, "F5"},
+    {0x40, "F6"},
+    {0x41, "F7"},
+    {0x42, "F8"},
+    {0x43, "F9"},
+    {0x44, "F10"},
+    {0x45, "Num Lock"},
+    {0x46, "Scroll Lock"},
+    {0x47, "Num 7"},
+    {0x48, "Num 8"},
+    {0x49, "Num 9"},
+    {0x4A, "Num -"},
+    {0x4B, "Num 4"},
+    {0x4C, "Num 5"},
+    {0x4D, "Num 6"},
+    {0x4E, "Num +"},
+    {0x4F, "Num 1"},
+    {0x50, "Num 2"},
+    {0x51, "Num 3"},
+    {0x52, "Num 0"},
+    {0x53, "Num Del"},
+    {0x57, "F11"},
+    {0x58, "F12"},
+    {0x9C, "Num Enter"},
+    {0x9D, "Right Ctrl"},
+    {0xB5, "Num /"},
+    {0xB7, "Prnt Scrn"},
+    {0xB8, "Right Alt"},
+    {0xC5, "Pause"},
+    {0xC7, "Home"},
+    {0xC8, "Up"},
+    {0xC9, "Page Up"},
+    {0xCB, "Left"},
+    {0xCD, "Right"},
+    {0xCF, "End"},
+    {0xD0, "Down"},
+    {0xD1, "Page Down"},
+    {0xD2, "Insert"},
+    {0xD3, "Delete"},
+    {0xDB, "Left Windows"},
+    {0xDC, "Right Windows"},
+    {0xDD, "Application"},
+};
+
+// EnumObjects on the keyboard: one push button per key, GUID_Key, dwOfs the
+// DIK code (the byte of the c_dfDIKeyboard state), dwType
+// DIDFT_PSHBUTTON | DIDFT_MAKEINSTANCE(code). A game may size its key table
+// from this, taking the highest code it is shown and treating every key
+// above it as up: with nothing enumerated, no key ever registers.
+uint32_t keyboard_enum_objects(X86 *c, ComObj *d, uint32_t cb, uint32_t ref, uint32_t flags) {
+    static const uint8_t GUID_Key_[16] = {0x20, 0x82, 0x72, 0x55, 0x3C, 0xD3, 0xCF, 0x11,
+                                          0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    if (!cb)
+        return DIERR_INVALIDPARAM;
+    uint32_t bits = flags & DIDFT_TYPEMASK;
+    if ((bits && !(bits & DIDFT_PSHBUTTON)) || (flags & 0x1F000000u))
+        return DI_OK; // keys are push buttons with no other attributes
+    uint32_t size = d->di_wide ? DIDEVICEOBJECTINSTANCEW_SIZE : DIDEVICEOBJECTINSTANCEA_SIZE;
+    for (const KeyObject &k : kKeyboardKeys) {
+        uint32_t a = di_scratch(size);
+        if (!a)
+            return E_OUTOFMEMORY;
+        gm_zero(a, size);
+        wr32(a, size);
+        memcpy(gm_ptr(a + DIDOI_OFF_guidType), GUID_Key_, 16);
+        wr32(a + DIDOI_OFF_dwOfs, k.code);
+        wr32(a + DIDOI_OFF_dwType, DIDFT_PSHBUTTON | ((uint32_t)k.code << 8));
+        if (d->di_wide)
+            di_put_wide(a + DIDOI_OFF_tszName, k.name, DIDOI_NAME_CHARS);
+        else
+            gm_put_str(a + DIDOI_OFF_tszName, k.name, DIDOI_NAME_CHARS);
+        if (guest_call(c, cb, a, ref) != 1 /* DIENUM_CONTINUE */)
+            break;
+    }
+    return DI_OK;
+}
+
 void Device_EnumObjects(X86 *c) {
     ComObj *d = this_device(c);
     if (d && is_joystick(d)) {
         com_ret(c, joy_enum_objects(c, d, arg(c, 1), arg(c, 2), arg(c, 3)));
         return;
     }
-    log_once("dx.Device_EnumObjects", "dx: Device_EnumObjects is not implemented; returning DI_OK");
+    if (d && d->dev_type == DIDEVTYPE_KEYBOARD) {
+        com_ret(c, keyboard_enum_objects(c, d, arg(c, 1), arg(c, 2), arg(c, 3)));
+        return;
+    }
+    log_once("dx.Device_EnumObjects", "dx: Device_EnumObjects on the mouse is not implemented; "
+                                      "returning DI_OK");
     com_ret(c, DI_OK);
 }
 

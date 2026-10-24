@@ -1013,6 +1013,58 @@ static void test_xinput() {
     CHECK_EQ(tramp("xinput9_1_0.dll", "XInputGetKeystroke"), 0u);
 }
 
+// The keyboard's objects: one button per key, GUID_Key, dwOfs the DIK code.
+// A game may learn the highest key code from this enumeration and treat
+// every key above it as up; with nothing enumerated every key reads as up.
+static uint32_t g_kobj_calls = 0, g_kobj_max_ofs = 0, g_kobj_bad = 0, g_kobj_stop_after = 0;
+static bool g_kobj_seen[256];
+static void enum_key_objects_cb(X86 *c) {
+    static const uint8_t guid_key[16] = {0x20, 0x82, 0x72, 0x55, 0x3C, 0xD3, 0xCF, 0x11,
+                                         0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    uint32_t o = arg(c, 0);
+    ++g_kobj_calls;
+    uint32_t ofs = rd32(o + 20), type = rd32(o + 24);
+    if (memcmp(gm_ptr(o + 4), guid_key, 16) != 0 || !(type & 0x04) ||
+        ((type >> 8) & 0xffff) != ofs || ofs > 255 || !gm_ptr(o + 32)[0])
+        ++g_kobj_bad;
+    if (ofs < 256)
+        g_kobj_seen[ofs] = true;
+    g_kobj_max_ofs = std::max(g_kobj_max_ofs, ofs);
+    set_eax(c, g_kobj_stop_after && g_kobj_calls >= g_kobj_stop_after ? 0 : 1);
+}
+static void test_keyboard_objects() {
+    cpu_reset();
+    pad_reset();
+    static uint32_t cb =
+        imports_alloc_trampoline("TEST", "EnumKeyObjectsCb", enum_key_objects_cb, 2);
+    uint32_t di = make_dinput8(0x0800);
+    CHECK(di != 0);
+    static const uint8_t guid_syskeyboard[16] = {0x61, 0x2B, 0x1D, 0x6F, 0xA0, 0xD5, 0xCF, 0x11,
+                                                 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    memcpy(gm_ptr(sc(0x40)), guid_syskeyboard, 16);
+    wr32(sc(0x50), 0);
+    CHECK_EQ(call_method(di, DI_CreateDevice, {sc(0x40), sc(0x50), 0}), DI_OK);
+    uint32_t kb = rd32(sc(0x50));
+    CHECK(kb != 0);
+    if (!kb)
+        return;
+    memset(g_kobj_seen, 0, sizeof g_kobj_seen);
+    g_kobj_calls = g_kobj_max_ofs = g_kobj_bad = g_kobj_stop_after = 0;
+    CHECK_EQ(call_method(kb, DID_EnumObjects, {cb, 0, 0 /* DIDFT_ALL */}), DI_OK);
+    CHECK(g_kobj_calls >= 100);
+    CHECK_EQ(g_kobj_bad, 0u);
+    CHECK(g_kobj_max_ofs >= 0xD0); // DIK_DOWN and the other cursor keys
+    CHECK(g_kobj_seen[0x01] && g_kobj_seen[0x1C] && g_kobj_seen[0x2D] && g_kobj_seen[0x39]);
+    CHECK(g_kobj_seen[0xC8] && g_kobj_seen[0xCB] && g_kobj_seen[0xCD] && g_kobj_seen[0xD0]);
+    g_kobj_calls = 0;
+    CHECK_EQ(call_method(kb, DID_EnumObjects, {cb, 0, 3 /* DIDFT_AXIS */}), DI_OK);
+    CHECK_EQ(g_kobj_calls, 0u);
+    g_kobj_calls = 0;
+    g_kobj_stop_after = 3; // DIENUM_STOP after the third
+    CHECK_EQ(call_method(kb, DID_EnumObjects, {cb, 0, 0xC /* DIDFT_BUTTON */}), DI_OK);
+    CHECK_EQ(g_kobj_calls, 3u);
+}
+
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     mem_init();
@@ -1033,6 +1085,7 @@ int main() {
         {"joystick pure helpers", test_joy_pure_helpers},
         {"joystick enumeration", test_joy_enum_devices},
         {"joystick through DirectInput 8", test_joy_dinput8},
+        {"keyboard objects", test_keyboard_objects},
         {"joystick state", test_joy_device_state},
         {"joystick objects", test_joy_objects},
         {"joystick buffered data", test_joy_device_data},
