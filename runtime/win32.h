@@ -161,6 +161,9 @@ bool sched_is_guest_thread();
 // run_entry needs this: every other guest thread is registered by the
 // scheduler when it starts.
 void sched_set_guest_thread(bool yes);
+// Import checkpoints retain a short time slice; translated back edges use
+// recomp_backedge_poll for immediate, budgeted handoffs.
+void sched_checkpoint();
 // True when this thread is the one the scheduler is currently letting run,
 // which is the only state in which the dispatch tables may be changed.
 //

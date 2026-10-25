@@ -314,8 +314,20 @@ struct X86 {
     /* XOR encoding makes a zero-initialized CPU start at MXCSR reset (0x1f80).
      * Guest rounding control must survive context switches and longjmp. */
     uint32_t mxcsr_xor;
+    uint32_t backedge_count;
 };
 typedef struct X86 X86;
+
+/* Pure guest loops must periodically offer the cooperative baton to workers.
+ * The slow path checks registered guest identity and atomic stretches. */
+void recomp_backedge_poll(void);
+#define RECOMP_BACKEDGE(c)                                                                         \
+    do {                                                                                           \
+        if (RECOMP_UNLIKELY(++(c)->backedge_count >= 4096u)) {                                     \
+            (c)->backedge_count = 0;                                                               \
+            recomp_backedge_poll();                                                                \
+        }                                                                                          \
+    } while (0)
 
 /* ----------------------------------------------------------------- SSE */
 static inline uint32_t sse_mxcsr(const X86 *c) {

@@ -886,9 +886,14 @@ void u_GetMessageA(X86 *c) {
     }
 
     for (;;) {
+        const Window *main_window = find_window(g_main_hwnd);
+        const bool drives_host =
+            guest_current_thread_id() == (main_window ? main_window->thread : 1);
         pump_window_timers();
-        pump_mouse_input(c);
-        gdi_present_windows();
+        if (drives_host) {
+            pump_mouse_input(c);
+            gdi_present_windows();
+        }
         for (auto it = queue().begin(); it != queue().end(); ++it) {
             if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
                 continue;
@@ -902,6 +907,10 @@ void u_GetMessageA(X86 *c) {
         if (pending_paint(p, filter_hwnd, min_msg, max_msg)) {
             set_eax(c, 1);
             return;
+        }
+        if (!drives_host) {
+            guest_sleep_ms(1);
+            continue;
         }
         host_pump_timers(c);
         pump_window_timers();

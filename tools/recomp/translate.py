@@ -2859,8 +2859,8 @@ class Translator(object):
                 out.append("    uint64_t seh_mark_ = recomp_seh_frame_mark(c);")
             out.append("    switch (entry_) {")
             for e in entries:
-                out.append("    case %s: goto L_%08x;" % (hexlit(e), e))
-            out.append("    default: goto L_%08x;" % fn.addr if head else
+                out.append("    case %s: %s" % (hexlit(e), self.goto_label(e)))
+            out.append("    default: " + self.goto_label(fn.addr) if head else
                        "    default: break;")
             out.append("    }")
         else:
@@ -2868,7 +2868,7 @@ class Translator(object):
             if fn.seh_escapes:
                 out.append("    uint64_t seh_mark_ = recomp_seh_frame_mark(c);")
             if head:
-                out.append("    goto L_%08x;" % fn.addr)
+                out.append("    " + self.goto_label(fn.addr))
         prologue = len(out)          # everything emitted so far is dispatch
         for i, ins in enumerate(fn.insns):
             if i in dead:
@@ -2907,7 +2907,7 @@ class Translator(object):
         if fn.addr not in fn.index:
             raise TranslateError("fn_%08x does not contain its own entry" % fn.addr)
         if head:
-            want = ("goto L_%08x;" % fn.addr, "default: goto L_%08x;" % fn.addr)
+            want = (self.goto_label(fn.addr), "default: " + self.goto_label(fn.addr))
             if not any(line.strip() in want for line in out[:prologue]):
                 raise TranslateError(
                     "fn_%08x starts at %08x, not at its own address; prologue "
@@ -3413,7 +3413,7 @@ class Translator(object):
                 # its own return address and takes the default arm instead.
                 L = ["uint32_t r_ = rd32(c->r[4]); c->r[4] += %du;" % (4 + n),
                      "switch (r_) {"]
-                L.extend("case %s: goto L_%08x;" % (hexlit(t), t)
+                L.extend("case %s: %s" % (hexlit(t), self.goto_label(t, ins.addr))
                          for t in sorted(fn.pushed_continuations))
                 L.extend(["default: c->eip = r_; " + orphan + "recomp_return(c); return;", "}"])
                 return L
@@ -3692,9 +3692,14 @@ class Translator(object):
             return
         raise TranslateError("call to %08x, which is outside the image" % t)
 
+    @staticmethod
+    def goto_label(target, source=None):
+        poll = "RECOMP_BACKEDGE(c); " if source is not None and target <= source else ""
+        return poll + "goto L_%08x;" % target
+
     def goto_target(self, fn, t, ins):
         if t in fn.index:
-            return ["goto L_%08x;" % t]
+            return [self.goto_label(t, ins.addr)]
         if t in self.func_addrs:
             self.stats["_tailcall"] += 1
             return ["CALL_FN(%08x); return;" % t]
@@ -3729,7 +3734,7 @@ class Translator(object):
             L.append("if (t_ >= %s && t_ < %s) {" % (hexlit(fn.insns[0].addr), hexlit(fn.end)))
             L.append("switch (t_) {")
             for t in sorted(fn.addrs - getattr(fn, "dead_addrs", set())):
-                L.append("case %s: goto L_%08x;" % (hexlit(t), t))
+                L.append("case %s: %s" % (hexlit(t), self.goto_label(t, ins.addr)))
             L.extend(["default: break;", "}", "}"])
             self.stats["_jmp_indirect_tail"] += 1
             L.append("c->eip = %s; recomp_jump(c, t_); return;" % hexlit(ins.addr))
@@ -3739,7 +3744,7 @@ class Translator(object):
         L.append("switch (t_) {")
         for t in sorted(set(targets)):
             if t in fn.index:
-                L.append("case %s: goto L_%08x;" % (hexlit(t), t))
+                L.append("case %s: %s" % (hexlit(t), self.goto_label(t, ins.addr)))
             else:
                 L.append("case %s: CALL_FN(%08x); return;" % (hexlit(t), t))
         L.append("default: c->eip = %s; recomp_jump(c, t_); return;" % hexlit(ins.addr))

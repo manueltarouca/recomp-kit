@@ -2020,6 +2020,8 @@ const uint32_t WAIT_TIMEOUT_ = 0x102;
 enum WaitKind : uint8_t { W_NONE, W_OBJECTS, W_CRITSEC };
 
 struct GuestThread {
+    std::condition_variable_any condition;
+    bool parked_for_work = false; // protected by g_sched_m
     size_t index = 0;
     uint32_t handle = 0; // 0 for the main thread: it has none
     uint32_t id = 1;     // GetCurrentThreadId
@@ -2066,8 +2068,19 @@ std::vector<GuestThread *> &threads() {
 }
 
 std::mutex g_sched_m;
-std::condition_variable_any g_sched_cv;
 size_t g_baton = 0; // index of the thread allowed to run
+void sched_notify_all_locked() {
+    for (GuestThread *thread : threads())
+        thread->condition.notify_one();
+}
+void sched_notify_baton_locked() {
+    if (g_baton < threads().size())
+        threads()[g_baton]->condition.notify_one();
+}
+void sched_notify_object_locked() {
+    if (g_baton < threads().size() && threads()[g_baton]->parked_for_work)
+        threads()[g_baton]->condition.notify_one();
+}
 // Read by the host from the very thread that sets it, so a plain bool is the
 // whole of it: no other thread looks.
 bool g_in_idle_slice = false;
@@ -2108,6 +2121,7 @@ static void (*g_thread_exit_observer)() = nullptr;
 // queued here under the scheduler lock and applied by the next thread to enter
 // the scheduler, which by construction is the baton holder.
 std::vector<uint32_t> g_host_signals;
+std::atomic<bool> g_host_signals_pending{false};
 // ---------------------------------------------------------------------------
 // Idling on the run thread.
 //
@@ -2158,6 +2172,7 @@ GuestThread *cur_thread() {
         m->id = 1;
         m->teb = TEB_BASE;
         m->tls = TLS_BASE;
+        m->tid = os_thread_self();
         threads().push_back(m);
         g_baton = 0;
     }
@@ -2308,7 +2323,7 @@ bool sched_in_idle_slice() {
 // it so it re-evaluates. Signalling costs nothing when nobody is parked.
 void sched_input_arrived() {
     g_sched_m.lock();
-    g_sched_cv.notify_all();
+    sched_notify_all_locked();
     g_sched_m.unlock();
 }
 
@@ -2384,7 +2399,10 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
         return;
     if (wait > 1.0)
         wait = 1.0;
-    g_sched_cv.wait_for(g_sched_m, std::chrono::duration<double>(wait));
+    GuestThread *thread = threads()[me];
+    thread->parked_for_work = g_baton == me;
+    thread->condition.wait_for(g_sched_m, std::chrono::duration<double>(wait));
+    thread->parked_for_work = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -2621,6 +2639,7 @@ void apply_host_signals_locked() {
             o->signalled = true;
     }
     g_host_signals.clear();
+    g_host_signals_pending.store(false, std::memory_order_release);
 }
 
 void sched_expire_locked() {
@@ -2662,6 +2681,18 @@ double sched_earliest_deadline_locked() {
         if (best == 0.0 || t->deadline < best)
             best = t->deadline;
     }
+    // An INFINITE wait on an armed timer still has a real wake deadline.
+    // Include timer objects in both wait-any and wait-all descriptors.
+    for (GuestThread *t : threads()) {
+        if (!t->blocked || t->wait_kind != W_OBJECTS)
+            continue;
+        for (uint32_t i = 0; i < t->wait_n; ++i) {
+            HObj *object = handle_any(t->wait_h[i]);
+            if (object && object->timer && object->timer_armed &&
+                (best == 0.0 || object->timer_due < best))
+                best = object->timer_due;
+        }
+    }
     return best;
 }
 
@@ -2689,6 +2720,17 @@ void sched_run_others_locked(size_t me, const char *why) {
             g_baton = me;
             return;
         }
+        // A waiter awakened by a process event must not inspect guest handles
+        // beside the running holder. Wait for ownership before expiring waits
+        // or draining queued host signals.
+        if (g_baton != me) {
+            if (g_baton >= threads().size() || threads()[g_baton]->finished)
+                g_baton = me;
+            else {
+                sched_wait_locked(me, 0.0, HOST_IDLE_BATON_SLICE);
+                continue;
+            }
+        }
         sched_expire_locked();
         if (thread_runnable(threads()[me])) {
             // Runnable is not the same as entitled. Every resume from a wait
@@ -2714,7 +2756,7 @@ void sched_run_others_locked(size_t me, const char *why) {
         if (next != NO_THREAD) {
             g_baton = next;
             record_handoff_locked(me, next, why);
-            g_sched_cv.notify_all();
+            sched_notify_baton_locked();
             // Wait for the baton, then loop: holding it is not the same as
             // being runnable, and a thread that ends hands the baton on
             // without knowing who is eligible. The run thread services the
@@ -2784,7 +2826,7 @@ void sched_handoff_on_exit_locked(size_t me, const char *why) {
         next = 0;
     g_baton = next;
     record_handoff_locked(me, next, why);
-    g_sched_cv.notify_all();
+    sched_notify_all_locked();
 }
 
 // Blocks the calling thread until its wait completes or its deadline passes.
@@ -2835,7 +2877,7 @@ bool guest_yield() {
     if (moved) {
         g_baton = next;
         record_handoff_locked(me->index, next, "yield");
-        g_sched_cv.notify_all();
+        sched_notify_baton_locked();
         while (g_baton != me->index)
             sched_wait_locked(me->index, 0.0, HOST_IDLE_BATON_SLICE);
     }
@@ -2889,7 +2931,8 @@ void guest_event_signal_from_host(uint32_t handle) {
         return;
     g_sched_m.lock();
     g_host_signals.push_back(handle);
-    g_sched_cv.notify_all();
+    g_host_signals_pending.store(true, std::memory_order_release);
+    sched_notify_all_locked();
     g_sched_m.unlock();
 }
 
@@ -2922,23 +2965,38 @@ void sched_atomic_unwind_to_esp(uint32_t esp) {
         --t_atomic;
 }
 
-void sched_checkpoint() {
-    // Drain first and unconditionally: a guest with no worker threads never
-    // reaches the scheduler proper, and a signal it never applied is a wait
-    // that never ends.
-    if (!g_host_signals.empty()) {
-        g_sched_m.lock();
-        apply_host_signals_locked();
+static void scheduling_checkpoint(bool force) {
+    bool yield = false;
+    g_sched_m.lock();
+    const bool pending = g_host_signals_pending.load(std::memory_order_acquire);
+    if (!sched_holds_baton_locked()) {
+        // Set-up code can drain before any guest entry/worker. A host callback
+        // after entry has no authority over the guest handle table.
+        if (pending && !g_guest_entry_begun && sched_guest_threads_stopped_locked())
+            apply_host_signals_locked();
         g_sched_m.unlock();
+        return;
     }
-    if (threads().size() < 2 || t_atomic)
-        return;
-    GuestThread *me = threads()[t_self];
-    double now = sched_now();
-    if (now - me->last_yield < SCHED_SLICE_SECONDS)
-        return;
-    me->last_yield = now;
-    guest_yield();
+    if (pending)
+        apply_host_signals_locked();
+    if (threads().size() >= 2 && !t_atomic) {
+        GuestThread *me = threads()[t_self];
+        const double now = sched_now();
+        if (force || now - me->last_yield >= SCHED_SLICE_SECONDS) {
+            me->last_yield = now;
+            yield = true;
+        }
+    }
+    g_sched_m.unlock();
+    if (yield)
+        guest_yield();
+}
+void sched_checkpoint() {
+    scheduling_checkpoint(false);
+}
+extern "C" void recomp_backedge_poll() {
+    if (t_is_guest)
+        scheduling_checkpoint(true);
 }
 
 namespace {
@@ -2948,7 +3006,7 @@ namespace {
 // whole timeout.
 void sched_wake_all() {
     g_sched_m.lock();
-    g_sched_cv.notify_all();
+    sched_notify_object_locked();
     g_sched_m.unlock();
 }
 
@@ -2960,7 +3018,7 @@ void pulse_event(HObj *o) {
         if (t->blocked && t->wait_kind == W_OBJECTS)
             sched_satisfy_locked(t);
     o->signalled = false;
-    g_sched_cv.notify_all();
+    sched_notify_object_locked();
     g_sched_m.unlock();
 }
 
@@ -3090,7 +3148,7 @@ void sched_leave_critsec(uint32_t cs) {
     wr32(cs + CS_OFF_LOCK_COUNT, rec ? rec - 1 : 0xffffffffu);
     if (!rec) {
         wr32(cs + CS_OFF_OWNER, 0);
-        g_sched_cv.notify_all();
+        sched_notify_object_locked();
     }
     g_sched_m.unlock();
 }
@@ -3138,7 +3196,7 @@ void *thread_host_main(void *arg) {
 
     g_sched_m.lock();
     while (g_baton != t->index && !g_exit_requested)
-        g_sched_cv.wait(g_sched_m);
+        t->condition.wait(g_sched_m);
     bool exiting = g_exit_requested;
     g_sched_m.unlock();
     // Created before the exit, first scheduled after it: Windows would never
@@ -3234,7 +3292,7 @@ void publish_process_exit(uint32_t code) {
     g_sched_m.lock();
     g_exit_requested = true;
     g_exit_requested_code = code;
-    g_sched_cv.notify_all();
+    sched_notify_all_locked();
     g_sched_m.unlock();
 }
 
@@ -3246,7 +3304,7 @@ bool request_process_exit(uint32_t code) {
     g_exit_requested_code = code;
     // Wake anything parked: the main thread may be inside an indefinite wait,
     // and it is the only thread that can perform the exit.
-    g_sched_cv.notify_all();
+    sched_notify_all_locked();
     g_sched_m.unlock();
     thread_finish_exit_process();
     return true;
@@ -3345,10 +3403,14 @@ bool thread_spawn(uint32_t h) {
         delete t;
         return false;
     }
+    g_sched_m.lock();
     threads().push_back(t);
+    g_sched_m.unlock();
     OsThread *host = os_thread_create(thread_host_main, t, 0);
     if (!host) {
+        g_sched_m.lock();
         threads().pop_back();
+        g_sched_m.unlock();
         if (loader_tls().index != 0xffffffffu)
             heap_free(rd32(t->tls + 4 * loader_tls().index));
         heap_free(t->stack_lo);
@@ -3479,7 +3541,7 @@ void k_ResumeThread(X86 *c) {
             --t->suspend_count;
         o->thread_suspended = t->suspend_count > 0;
         if (!t->suspend_count)
-            g_sched_cv.notify_all();
+            sched_notify_all_locked();
         g_sched_m.unlock();
         set_eax(c, (uint32_t)was);
         return;
@@ -4366,7 +4428,7 @@ void sched_drive_release(void) {
             } else {
                 g_baton = NO_THREAD;
             }
-            g_sched_cv.notify_all();
+            sched_notify_all_locked();
         }
     }
     g_sched_m.unlock();

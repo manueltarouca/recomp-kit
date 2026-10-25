@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Give each cooperative guest thread its own scheduler condition and wake
+  the next baton holder directly. Translated backward branches poll every
+  4096 iterations so import-free loops let workers run; atomic stretches
+  remain protected. Waited-on timers contribute deadlines, host signals
+  drain only with guest ownership, and helper GetMessage loops avoid host
+  frame services. Fixes #29.
+
 - Model packed SSE1 arithmetic, reciprocal/square-root, comparisons, lane
   moves and MMX conversions used without a CPUID check. Correct scalar
   min/max and float-to-int results, preserve MXCSR rounding control, and

@@ -144,7 +144,7 @@ def test_indirect_jump_through_a_structure_field_is_not_a_table(operand):
     # runtime dispatch. This does not turn the operand into a decoded table.
     assert "switch (t_)" in source
     for addr in sorted(fn.addrs):
-        assert "case %s: goto L_%08x;" % (T.hexlit(addr), addr) in source
+        assert "case %s: RECOMP_BACKEDGE(c); goto L_%08x;" % (T.hexlit(addr), addr) in source
     assert "default: break;" in source
     assert tr.table_sites == {}
     assert tr.jumptables == {}

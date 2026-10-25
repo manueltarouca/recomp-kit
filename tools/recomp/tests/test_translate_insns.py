@@ -73,6 +73,7 @@ class X86(C.Structure):
         ("xmm", (C.c_uint32 * 4) * 8),
         ("mm", C.c_uint64 * 8),
         ("mxcsr_xor", C.c_uint32),
+        ("backedge_count", C.c_uint32),
     ]
 
 

@@ -36,6 +36,7 @@ PORTABLE_TESTS = [
     "tools/recomp/tests/test_pointer_scan.py",
     "tools/recomp/tests/test_intrinsics_config.py",
     "tools/recomp/tests/test_translate_relocate.py",
+    "tools/recomp/tests/test_translate_backedge.py",
     "tools/recomp/tests/test_translate_seh.py",
     "tools/recomp/tests/test_translate_imports.py",
     "tools/recomp/tests/test_translate_vector.py",

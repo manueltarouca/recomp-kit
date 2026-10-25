@@ -359,7 +359,8 @@ def test_return_switch_requires_pushed_instruction_boundary(target, dispatch):
     assert ("switch (r_)" in text) == dispatch
     if dispatch:
         assert text.count("switch (r_)") == 2
-        assert text.count("case 0x60100bu: goto L_0060100b;") == 2
+        assert text.count("case 0x60100bu: goto L_0060100b;") == 1
+        assert text.count("case 0x60100bu: RECOMP_BACKEDGE(c); goto L_0060100b;") == 1
         assert "c->r[4] += 12u;" in text
         assert text.count("default: c->eip = r_; recomp_return(c); return;") == 2
     assert "void fn_00601005(X86 *c) { body_00601000(c, 0x601005u); }" in text
@@ -382,7 +383,8 @@ def test_tableless_jump_uses_all_local_instruction_labels(indirect):
     if indirect:
         assert "if (t_ >= 0x601000u && t_ < 0x601004u)" in text
         for addr in sorted(fn.addrs):
-            assert "case %s: goto L_%08x;" % (T.hexlit(addr), addr) in text
+            poll = "RECOMP_BACKEDGE(c); " if addr <= entry else ""
+            assert "case %s: %sgoto L_%08x;" % (T.hexlit(addr), poll, addr) in text
             assert "L_%08x: ;" % addr in text
         assert "default: break;" in text
         assert text.index("default: break;") < text.index("recomp_jump(c, t_)")

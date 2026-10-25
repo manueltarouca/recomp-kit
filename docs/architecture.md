@@ -91,6 +91,18 @@ guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choic
 
 ## Discovery, and code a build does not carry
 
+Translated local back edges share `goto_label`, which emits a budget poll
+before backward/self transfers, including computed switch and pushed-return
+continuations. Every 4096 taken back edges offers an immediate scheduler
+handoff on registered guest threads, except inside atomic stretches. Import
+checkpoints retain their time slice. Each guest parks on its own condition;
+handoffs wake the new holder, object changes wake a holder parked for work,
+and process-wide notifications wake everyone. Thread publication uses the
+scheduler mutex. Only the baton holder expires waits or drains queued host
+signals after entry; pre-entry setup may drain when workers are stopped.
+Waited-on armed timers are deadlines even for INFINITE waits. Helper window
+message loops sleep cooperatively without driving host frame services.
+
 Auxiliary DLL `base` is a load address, which may differ from its PE preferred
 base. Translator and loader both accept PE32 HIGHLOW relocations and ABSOLUTE
 padding, rejecting missing/malformed directories and unsupported or invalid

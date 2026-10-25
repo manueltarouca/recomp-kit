@@ -206,6 +206,7 @@ class X86(C.Structure):
         ("fs_base", C.c_uint32),
         ("mm", C.c_uint64 * 8),
         ("mxcsr_xor", C.c_uint32),
+        ("backedge_count", C.c_uint32),
     ]
 
 

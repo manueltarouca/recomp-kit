@@ -5,6 +5,12 @@ as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
 event timers without a message loop, callback cancellation/replacement,
 worker exit/restart, periodic cadence, pinned time and shutdown.
 
+`scheduler_tests` checks progress from import-free loops within two budget
+polls, the 4096-edge budget, atomic protection, host-thread exclusion, a
+20 ms waitable-timer deadline and 16 workers making repeated exclusive
+handoffs. `test_translate_backedge.py` checks branch/dispatch emission and
+that generated local gotos share one helper.
+
 `vector_tests` pins MXCSR rounding, conversion exception status and integer
 indefinite values (including FISTTP) against architectural constants. The
 synthetic instruction differential suite also covers packed/scalar SSE1,
