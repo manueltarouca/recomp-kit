@@ -336,6 +336,12 @@ class LoadTests(unittest.TestCase):
                                            'guest_size = 0x80000000').split('[modules.aux.high]')[0],
                               encoding="utf-8")
             self.assertEqual(game_config.load(game)["game"]["layout_end"], 0x80000000)
+            config.write_text(text.replace('guest_size = 0x10100000',
+                                           'guest_size = 0x80000000\nheap_base = 0x40000000').replace(
+                                               'base = 0x10000000', 'base = 0x3fff0000'),
+                              encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "base/size"):
+                game_config.load(game)
 
     def test_mm_timer_mode(self):
         cfg = game_config.load(ROOT / "games/stub")

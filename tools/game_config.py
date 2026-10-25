@@ -312,6 +312,7 @@ def load_aux_modules(cfg, game_dir, source):
         base, size = entry["base"], entry["size"]
         if (type(base) is not int or type(size) is not int or base < 0x10000 or base % 0x10000
                 or size <= 0 or base + size > guest_size
+                or base < game["heap_base"] < base + size
                 or (base + size > game["heap_base"] and base < GUEST_SIZE_DEFAULT)):
             raise ValueError("%s: [modules.aux.%s] base/size must be 64 KB aligned at or above 0x10000, fit the arena, and avoid runtime regions"
                              % (source, key))

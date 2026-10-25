@@ -1013,6 +1013,54 @@ def test_relocated_switch_method_owns_its_relocated_cases(tmp_path, monkeypatch)
     assert "goto L_%08x;" % case in text
 
 
+@pytest.mark.parametrize("tail_kind", ["entry", "interior", "unselected"])
+def test_relocated_switch_case_can_fall_into_listed_shared_tail(tmp_path, monkeypatch, tail_kind):
+    """A switch edge proves its case, including a fall-through into known code."""
+    import struct
+    anchor, method, case, tail, table, slot = (
+        0x601000, 0x601020, 0x601060, 0x601064, 0x601100, 0x601800)
+    head = b"\x83\xf8\x00\x77\x0b\xff\x24\x85" + struct.pack("<I", table)
+    blocks = {anchor: b"\xc3", method: head, method+0x10: b"\xc3",
+              case: b"\x85\xc0\x74\x01\xc3\xc3",
+              table: struct.pack("<I", case), slot: struct.pack("<I", method)}
+    image = synthetic_image(blocks, base=0x600000)
+    image.relocated_pointers = lambda: {method: slot}
+    listings = {anchor: blocks[anchor], tail: b"\xc3", tail+1: b"\xc3"}
+    if tail_kind == "interior":
+        jump = b"\xe9" + struct.pack("<i", tail-anchor-5)
+        image.data = image.data[:anchor-image.base] + jump + image.data[anchor-image.base+5:]
+        listings = {anchor: [(anchor, jump), (tail, b"\xc3")], tail+1: b"\xc3"}
+    if tail_kind == "unselected":
+        original = T.load_functions
+        monkeypatch.setattr(T, "load_functions", lambda *args: [row for row in original(*args)
+                                                                if row[0] != tail])
+    text = translate_entry_fixture(tmp_path, monkeypatch, image, listings)
+    assert "void fn_%08x(" % method in text
+    assert "L_%08x:" % case in text
+    assert "goto L_%08x;" % case in text
+
+
+@pytest.mark.parametrize("relocated_default", [False, True])
+@pytest.mark.parametrize("table_default", [False, True])
+def test_switch_default_pointer_does_not_cut_case_fallthrough(tmp_path, monkeypatch, relocated_default, table_default):
+    """The method already reaches its default tail before decoding its cases."""
+    import struct
+    anchor, method, case, default, table, slot = (
+        0x601000, 0x601020, 0x60105c, 0x601060, 0x601100, 0x601800)
+    head = (b"\x83\xf8" + (b"\x01" if table_default else b"\x00") + b"\x77" + bytes([default-method-5]) +
+            b"\xff\x24\x85" + struct.pack("<I", table))
+    image = synthetic_image({anchor: b"\xc3", method: head,
+                             case: b"\x85\xc0\x74\x01\xc3\xc3",
+                             table: struct.pack("<II", case, default) if table_default else struct.pack("<I", case), slot: struct.pack("<II", method, default)},
+                            base=0x600000)
+    image.relocated_pointers = lambda: ({method: slot, default: slot+4} if relocated_default
+                                        else {method: slot})
+    text = translate_entry_fixture(tmp_path, monkeypatch, image, {anchor: b"\xc3"})
+    assert "void fn_%08x(" % method in text
+    assert "L_%08x:" % case in text
+    assert "L_%08x:" % default in text
+
+
 def test_unselected_listing_inside_first_opcode_does_not_bound_method(tmp_path,monkeypatch):
     import struct
     anchor,method,slot = 0x601000,0x601020,0x601800

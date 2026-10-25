@@ -4805,7 +4805,7 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     chunks = []
 
-    def accepts(fn, reached=False):
+    def accepts(fn, reached=False, reached_instructions=frozenset()):
         """Can the emitter translate every instruction of this block?
 
         A candidate address that is really data decodes into instructions this
@@ -4815,7 +4815,8 @@ def main():
 
         `reached` says an instruction of a body this translation already
         carries names this block, which is what lets it end on a fall-out
-        into another such entry; see the loop below."""
+        into another such entry. `reached_instructions` applies that evidence
+        only to decoded switch cases, without promoting a speculative prefix."""
         if fn.addr not in protected_entries:
             if image.data[fn.addr - image.base:fn.addr - image.base + 2] == b"\x00\x00":
                 # ADD byte ptr [EAX],AL is data at a speculative function start.
@@ -4846,17 +4847,23 @@ def main():
                 fall = fn.fallthrough[i]
                 if fall in fn.addrs:
                     continue
-                if reached and fall is not None and fall in all_addrs and fall in owner:
+                if ((reached or ins.addr in reached_instructions) and fall is not None
+                        and fall in all_addrs and fall in owner):
                     continue
+                trace(fn.addr, "refused fall-through %08x -> %s (%s, %s, switch=%s, callable=%s)" % (
+                    ins.addr, "%08x" % fall if fall is not None else "none", ins.mnem, fn.name,
+                    ins.addr in reached_instructions, fall in all_addrs and fall in owner))
                 return False
         notes, stats = len(tr.notes), dict(tr.stats)
         try:
             tr.prepare(fn)
             tr.translate(fn)
             return True
-        except TranslateError:
+        except TranslateError as error:
+            trace(fn.addr, "refused emission: %s" % error)
             return False
-        except Exception:                       # noqa: BLE001
+        except Exception as error:              # noqa: BLE001
+            trace(fn.addr, "refused preparation: %s: %s" % (type(error).__name__, error))
             return False
         finally:
             del tr.notes[notes:]
@@ -5097,6 +5104,7 @@ def main():
                 provenance[t] = why
             return True
         bounds = None
+        switch_owned, direct_targets = set(), set()
         boundaries = set()
         recovery_stops = listed - prior.addrs if separate else listed
         if protected and why == "config":
@@ -5139,12 +5147,22 @@ def main():
                     tr.prepare(probe_fn)
                 except TranslateError:
                     pass
+                has_switch = False
                 for (entry, _site), targets in list(tr.jumptables.items()):
                     if entry == t:
+                        has_switch = True
                         switch_targets.update(a for a in targets if t < a < bounds[1])
                         continuations.update(switch_targets)
                 stubs = set(seh_frame_sites(probe_fn, image).values())
                 for ins in probe_fn.insns:
+                    # A switch default can already be in the initial probe.
+                    # Keep its verified branch edge before pointer aliases
+                    # can split it away from cases falling into that tail.
+                    if has_switch and ins.mnem not in ("CALL", "JMP"):
+                        branch = Translator.branch_target(ins)
+                        if branch in probe_fn.addrs and t < branch < bounds[1]:
+                            direct_targets.add(branch)
+                            continuations.add(branch)
                     if ins.mnem == "PUSH" and ins.ops:
                         op = parse_operand(ins.ops[0])
                         if op.kind == "imm" and t < op.imm < bounds[1]:
@@ -5164,15 +5182,21 @@ def main():
                     # Recover its clean span-bounded bytes before judging the
                     # establishing prefix's termination, then let normal
                     # adoption transfer ownership without promoting the prefix.
-                    block = image.recover(target, stubs | (set(fragments) if target in switch_targets else set()),
-                                          bounds=bounds)
+                    # A default can also occupy a table slot. Recover its
+                    # whole tail even when the initial probe already contains
+                    # its entry, so a weaker pointer cannot split it away.
+                    case_stops = set(fragments) if target in switch_targets and target not in direct_targets else set()
+                    block = image.recover(target, stubs | case_stops, bounds=bounds)
                     fragment = Function(target, "continuation", 0, block)
                     fragment.measure(image)
                     merged = dict(fragments)
                     merged.update((ins.addr, ins) for ins in block)
                     combined = Function(t, "candidate", 0, [merged[a] for a in sorted(merged)])
                     combined.measure(image)
-                    if not block or not accepts(combined if target in switch_targets else fragment):
+                    reached_insns = (switch_owned | fragment.addrs if target in switch_targets else
+                                     fragment.addrs if target in direct_targets else frozenset())
+                    if not block or not accepts(combined if target in switch_targets else fragment,
+                                                reached_instructions=reached_insns):
                         continue
                     if target in switch_targets:
                         switch_owned.update(ins.addr for ins in block)
@@ -5207,7 +5231,7 @@ def main():
         # translation already carries names it, which is what lets it end on
         # a fall-out into another entry; see `accepts`.
         reached = home is not None
-        if validate and not accepts(new_fn, reached=reached):
+        if validate and not accepts(new_fn, reached=reached, reached_instructions=switch_owned):
             # Two different things can have refused the body, so there are two
             # ways back, on separate axes: which boundaries may cut a body, and
             # which fall-outs are acceptable. `reached` above answers the
@@ -5271,7 +5295,7 @@ def main():
                     retry_fn = candidate
             # The wider body is judged by the same rule as the first one: a
             # block a branch reached may still end in another entry.
-            if retry_fn is not None and accepts(retry_fn, reached=reached):
+            if retry_fn is not None and accepts(retry_fn, reached=reached, reached_instructions=switch_owned):
                 new_fn = retry_fn
             else:
                 # Decoded into something this compiler never emits, so the
@@ -5285,7 +5309,7 @@ def main():
         all_addrs.add(t)
         register(new_fn)
         if not protected:
-            for target in switch_targets & new_fn.addrs:
+            for target in (switch_targets | direct_targets) & new_fn.addrs:
                 switch_owners[target] = new_fn
         if separate:
             extra.pop(t, None)
@@ -5335,13 +5359,15 @@ def main():
                 merged.update((ins.addr, ins) for ins in block)
                 grown = Function(fn.addr, fn.name, fn.size, [merged[a] for a in sorted(merged)])
                 grown.measure(image)
-                # A fall-out may enter this same function, never unrelated
-                # listed code. Reject padding decoded as a plausible prefix.
+                # A decoded switch edge proves this case. Its tail may fall
+                # into an existing callable instruction boundary, as well
+                # as this function; arbitrary scan prefixes still cannot.
                 if any(ins.mnem not in TERMINATORS and not tr.never_returns(ins)
                        and grown.fallthrough[i] not in grown.addrs
+                       and not (grown.fallthrough[i] in all_addrs and grown.fallthrough[i] in owner)
                        for i, ins in enumerate(grown.insns) if ins.addr not in fn.addrs):
                     continue
-                if not accepts(grown):
+                if not accepts(grown, reached_instructions={ins.addr for ins in block}):
                     continue
                 fn.__dict__.update(grown.__dict__)
                 register(fn)

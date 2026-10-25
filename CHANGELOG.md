@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep pointer-discovered switch methods callable when cases share a listed
+  tail or the default also appears in the jump table. Preserve the verified
+  default body before weaker pointer candidates can split it away.
+
 - Preserve downstream ports whose auxiliary DLLs load above the runtime memory
   regions. Derive a separate layout ceiling below the first high DLL while
   retaining the full guarded arena; keep heap, stacks, mod memory and import
