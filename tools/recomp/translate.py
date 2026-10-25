@@ -842,11 +842,14 @@ def flag_effect(insn):
 # ------------------------------------------------------------------- image --
 
 class Image(object):
-    def __init__(self, path):
+    def __init__(self, path, base=None):
         import pefile
-        pe = pefile.PE(path, fast_load=True)
-        self.base = pe.OPTIONAL_HEADER.ImageBase
+        pe = pefile.PE(data=Path(path).read_bytes(), fast_load=True)
+        self.preferred_base = pe.OPTIONAL_HEADER.ImageBase
+        self.base = self.preferred_base if base is None else base
         self.size = pe.OPTIONAL_HEADER.SizeOfImage
+        if pe.OPTIONAL_HEADER.Magic != 0x10b or not 0 <= self.base < self.base + self.size <= 0x100000000:
+            raise TranslateError("relocation requires a PE32 image at a valid 32-bit base")
         data = pe.get_memory_mapped_image()
         # get_memory_mapped_image() stops at the last section's raw end, which
         # is short of SizeOfImage; the architectural image runs to
@@ -857,6 +860,14 @@ class Image(object):
         self.end = self.base + self.size
         rel = pe.OPTIONAL_HEADER.DATA_DIRECTORY[5]      # IMAGE_DIRECTORY_BASERELOC
         self.reloc_dir = (rel.VirtualAddress, rel.Size)
+        self.rebase_delta = self.base - self.preferred_base
+        if self.rebase_delta:
+            self.data = self.rebase(self.data, self.reloc_dir, self.rebase_delta)
+            # Keep headers consistent with the bytes mapped by the runtime.
+            data = bytearray(self.data)
+            at = pe.OPTIONAL_HEADER.get_field_absolute_offset("ImageBase")
+            data[at:at + 4] = self.base.to_bytes(4, "little")
+            self.data = bytes(data)
         #: Import address table slots by address, as the imported name.
         #: noreturn_callees_from reads it to see that a function ending in
         #: RaiseException - MSVC's _CxxThrowException - does not return, and
@@ -869,7 +880,7 @@ class Image(object):
             for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []):
                 for imp in entry.imports:
                     if imp.name:
-                        self.iat_names[imp.address] = imp.name.decode("ascii", "replace")
+                        self.iat_names[imp.address + self.rebase_delta] = imp.name.decode("ascii", "replace")
         except Exception:                 # a malformed table only loses names
             pass
         pe.close()
@@ -903,6 +914,63 @@ class Image(object):
             self.md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
         except ImportError:            # length checking is optional
             self.md = None
+
+    @staticmethod
+    def rebase(data, directory, delta):
+        """Validate all HIGHLOW sites before changing bytes; ABSOLUTE is padding."""
+        rva, size = directory
+        if not rva or size < 8 or rva + size > len(data):
+            raise TranslateError("missing or out-of-image base relocation directory")
+        sites, seen = [], set()
+        end, off = rva + size, rva
+        while off < end:
+            if off + 8 > end:
+                raise TranslateError("truncated base relocation block")
+            page = int.from_bytes(data[off:off + 4], "little")
+            block = int.from_bytes(data[off + 4:off + 8], "little")
+            if block < 8 or block % 2 or off + block > end:
+                raise TranslateError("invalid base relocation block size")
+            for at in range(off + 8, off + block, 2):
+                entry = int.from_bytes(data[at:at + 2], "little")
+                kind, site = entry >> 12, page + (entry & 0xfff)
+                if kind == 0:
+                    continue
+                if kind != 3 or site + 4 > len(data):
+                    raise TranslateError("unsupported or out-of-image base relocation")
+                if site in seen:
+                    raise TranslateError("duplicate base relocation site")
+                seen.add(site)
+                sites.append(site)
+            off += block
+        out = bytearray(data)
+        for site in sites:
+            value = int.from_bytes(data[site:site + 4], "little")
+            out[site:site + 4] = ((value + delta) & 0xffffffff).to_bytes(4, "little")
+        return bytes(out)
+
+    def rebase_listing(self, insns):
+        """Re-decode listed instruction starts from relocated bytes, not address-shaped
+        literals in text (which could be non-pointer constants)."""
+        delta = getattr(self, "rebase_delta", 0)
+        if not delta:
+            return insns
+        if self.md is None:
+            raise TranslateError("capstone is required to rebase listings")
+        out = []
+        old_detail = self.md.detail
+        self.md.detail = True
+        try:
+            for ins in insns:
+                va = ins.addr + delta
+                if not self.base <= va < self.end:
+                    raise TranslateError("listed instruction outside relocated image")
+                ci = next(self.md.disasm(self.data[va - self.base:va - self.base + 16], va, count=1), None)
+                if ci is None:
+                    raise TranslateError("cannot decode relocated instruction at %08x" % va)
+                out.append(self.to_insn(ci))
+        finally:
+            self.md.detail = old_detail
+        return out
 
     def relocated_pointers(self):
         """Every address named by a dword the loader rewrites, and where.
@@ -4147,7 +4215,7 @@ def main():
         SYMBOL_PREFIX = "recomp_%s_" % re.sub(r"[^A-Za-z0-9_]", "_", args.as_module)
         AUX_MODULE = {"name": args.as_module, "base": cfg["game"]["image_base"],
                       "size": 0}  # the image's extent, filled in once it is read
-    image = Image(BINARY)
+    image = Image(BINARY, base=AUX_MODULE["base"]) if AUX_MODULE is not None and not args.as_module else Image(BINARY)
     discovered = []
     if args.discovered:
         global EXTRA_ENTRY_POINTS
@@ -4174,16 +4242,19 @@ def main():
               % ", ".join("%08x" % a for a in sorted(forget)), file=sys.stderr)
 
     t0 = time.time()
-    entries = load_functions(set(args.only) if args.only else None)
+    delta = getattr(image, "rebase_delta", 0)
+    selected_listings = {"%08x" % (int(a, 16) - delta) for a in args.only} if args.only else None
+    entries = load_functions(selected_listings)
+    entries = [(addr + delta, name, size, path) for addr, name, size, path in entries]
     all_addrs = set()
     listed_starts = []
     with open(FUNCS_TSV) as fh:
         for l in list(fh)[1:]:
             a = int(l.split("\t")[0], 16)
-            listed_starts.append(a)
+            listed_starts.append(a + delta)
             p = os.path.join(LISTINGS, "%08x.asm" % a)
             if os.path.exists(p) and os.path.getsize(p) > 0:
-                all_addrs.add(a)
+                all_addrs.add(a + delta)
 
     if AUX_MODULE is not None and args.as_module:
         # A module of the image's own code covers the image's addresses; the
@@ -4205,6 +4276,8 @@ def main():
     for addr, name, nbytes, path in entries:
         try:
             insns = parse_listing(path)
+            if delta:
+                insns = image.rebase_listing(insns)
         except TranslateError as e:
             failures.append((addr, "parse: %s" % e))
             continue

@@ -1072,6 +1072,9 @@ void k_SetCurrentDirectoryA(X86 *c) {
 std::string module_file_name(uint32_t hmod) {
     std::string path = g_guest_exe_dir + "\\" RECOMP_EXECUTABLE;
     if (hmod && hmod != IMAGE_BASE) {
+        if (const LoaderModule *mapped = loader_module_containing(hmod))
+            if (mapped->base == hmod)
+                return win32_guest_path(mapped->path);
         for (const auto &kv : modules())
             if (kv.second == hmod) {
                 path = g_guest_exe_dir + "\\" + kv.first;
@@ -1158,6 +1161,105 @@ uint32_t call_dll_entry(X86 *c, const LoaderModule &m, uint32_t reason) {
     return result;
 }
 
+bool release_mapped_module(X86 *c, LoaderModule *m);
+
+// Each first attach owns references to its imported mapped DLLs. Back edges
+// in a cyclic import graph do not acquire an extra reference: the outer
+// attach owns that lifetime and will detach the cycle in reverse order.
+bool acquire_mapped_module(X86 *c, LoaderModule *m) {
+    if (m->detaching)
+        return false;
+    if (m->attached) {
+        if (!m->attaching)
+            ++m->load_refs;
+        return true;
+    }
+    if (m->initial_image.size() != m->size)
+        return false;
+    memcpy(g_mem + m->base, m->initial_image.data(), m->initial_image.size());
+    m->attached = m->attaching = true;
+    m->load_refs = 1;
+    m->owned_dependencies.clear();
+    bool ok = true;
+    for (const std::string &name : m->dependencies) {
+        LoaderModule *dep = loader_module_named(name.c_str());
+        if (!dep) {
+            ok = false;
+            break;
+        }
+        if (dep->base == loader_image_base() || dep->attaching)
+            continue;
+        if (!acquire_mapped_module(c, dep)) {
+            ok = false;
+            break;
+        }
+        m->owned_dependencies.push_back(name);
+    }
+    if (ok) {
+        ok = call_dll_entry(c, *m, 1) != 0;
+        if (!ok)
+            call_dll_entry(c, *m, 0);
+    }
+    m->attaching = false;
+    if (!ok) {
+        m->attached = false;
+        m->load_refs = 0;
+        auto dependencies = std::move(m->owned_dependencies);
+        m->owned_dependencies.clear();
+        for (auto it = dependencies.rbegin(); it != dependencies.rend(); ++it)
+            release_mapped_module(c, loader_module_named(it->c_str()));
+    }
+    return ok;
+}
+
+bool release_mapped_module(X86 *c, LoaderModule *m) {
+    if (!m || !m->attached || !m->load_refs || m->attaching || m->detaching)
+        return false;
+    if (m->pinned && m->load_refs == 1)
+        return true;
+    if (--m->load_refs)
+        return true;
+    m->detaching = true;
+    call_dll_entry(c, *m, 0);
+    m->attached = m->detaching = false;
+    auto dependencies = std::move(m->owned_dependencies);
+    m->owned_dependencies.clear();
+    for (auto it = dependencies.rbegin(); it != dependencies.rend(); ++it)
+        release_mapped_module(c, loader_module_named(it->c_str()));
+    return true;
+}
+
+bool attach_static_modules(X86 *c) {
+    LoaderModule *main = loader_module_named(RECOMP_EXECUTABLE);
+    if (!main)
+        return true;
+    std::vector<LoaderModule *> acquired;
+    for (const auto &name : main->dependencies) {
+        LoaderModule *m = loader_module_named(name.c_str());
+        if (!m || !acquire_mapped_module(c, m)) {
+            for (auto it = acquired.rbegin(); it != acquired.rend(); ++it)
+                release_mapped_module(c, *it);
+            set_last_error(1114);
+            return false;
+        }
+        acquired.push_back(m);
+    }
+    // Pin the complete successfully attached graph, only after the transaction
+    // succeeds so a failure can still unwind every reference it acquired.
+    std::vector<LoaderModule *> pending = acquired;
+    while (!pending.empty()) {
+        LoaderModule *m = pending.back();
+        pending.pop_back();
+        if (m->pinned)
+            continue;
+        m->pinned = true;
+        for (const auto &name : m->dependencies)
+            if (LoaderModule *dep = loader_module_named(name.c_str()))
+                pending.push_back(dep);
+    }
+    return true;
+}
+
 void load_library_named(X86 *c, const std::string &module_name) {
     std::string name = library_name(module_name);
     auto it = modules().find(name);
@@ -1172,20 +1274,10 @@ void load_library_named(X86 *c, const std::string &module_name) {
             set_eax(c, m->base);
             return;
         }
-        if (!m->attached) {
-            memcpy(g_mem + m->base, m->initial_image.data(), m->initial_image.size());
-            m->attached = true;
-            m->load_refs = 1;
-            if (!call_dll_entry(c, *m, 1)) { // DLL_PROCESS_ATTACH
-                call_dll_entry(c, *m, 0);    // failed attach still receives detach
-                m->attached = false;
-                m->load_refs = 0;
-                set_last_error(1114); // ERROR_DLL_INIT_FAILED
-                set_eax(c, 0);
-                return;
-            }
-        } else {
-            ++m->load_refs;
+        if (!acquire_mapped_module(c, m)) {
+            set_last_error(1114);
+            set_eax(c, 0);
+            return;
         }
         set_eax(c, m->base);
         return;
@@ -1227,9 +1319,10 @@ void k_FreeLibrary(X86 *c) {
             set_eax(c, 0);
             return;
         }
-        if (--m->load_refs == 0) {
-            call_dll_entry(c, *m, 0); // DLL_PROCESS_DETACH, before discarding globals
-            m->attached = false;
+        if (!release_mapped_module(c, m)) {
+            set_last_error(ERROR_INVALID_HANDLE_);
+            set_eax(c, 0);
+            return;
         }
     }
     // Shim-only libraries have process lifetime and no guest entry point.
@@ -1315,6 +1408,9 @@ void k_GetCommandLineA(X86 *c) {
     get_command_line(c);
 }
 } // namespace
+bool win32_attach_static_modules(X86 *c) {
+    return attach_static_modules(c);
+}
 void win32_reset_command_line_for_test() {
     kernel32_wide_reset_command_line();
     g_cmdline_addr = 0;

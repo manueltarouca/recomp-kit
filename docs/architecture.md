@@ -91,6 +91,19 @@ guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choic
 
 ## Discovery, and code a build does not carry
 
+Auxiliary DLL `base` is a load address, which may differ from its PE preferred
+base. Translator and loader both accept PE32 HIGHLOW relocations and ABSOLUTE
+padding, rejecting missing/malformed directories and unsupported or invalid
+sites when rebasing. The translator re-decodes listed instruction starts from
+relocated bytes, preserving non-pointer constants and relative branch targets.
+Ranges start on a 64 KB boundary at or above 0x10000, end below `heap_base`,
+and cannot overlap another mapped image. All modules map before any IAT binds.
+Mapped imports own dependency references; DLL_PROCESS_ATTACH runs dependencies
+first, DLL_PROCESS_DETACH releases them in reverse order, and fresh loads restore
+the relocated, bound image. Cyclic back edges do not acquire duplicate lifetime
+references. Static EXE imports attach and pin their full dependency graph before
+EXE TLS callbacks/entry. Failed startup attach rolls back its acquired graph.
+
 A port whose executable sits below its data root sets `[game] exe_dir`, for
 example `"Binaries"` or `"Binaries/Win32"`. It must be relative, with no dot
 or parent components, and `developer_exe` must sit in that directory.

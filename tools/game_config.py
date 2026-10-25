@@ -269,10 +269,10 @@ def load_aux_modules(cfg, game_dir, source):
     the kit translates as a second image and maps at its preferred base, so
     its code runs as translated code and its exports answer GetProcAddress.
     Keys: name (the file name the guest asks for), path (developer copy,
-    relative to game.toml), sha256, base and size (the PE's preferred base
-    and SizeOfImage), listings (Ghidra export directory, relative), and
-    function_alignment (default 4). [game] guest_size must reach past every
-    module; the default arena is 0x10000000."""
+    relative to game.toml), sha256, base and size (the load address and reserved
+    image size), listings (Ghidra export directory, relative), and
+    function_alignment (default 4). Modules must not overlap, must be 64 KB
+    aligned, and must fit below the guest heap."""
     game = cfg["game"]
     guest_size = int(game.setdefault("guest_size", GUEST_SIZE_DEFAULT))
     if guest_size % 0x1000 or guest_size < GUEST_SIZE_DEFAULT:
@@ -284,10 +284,13 @@ def load_aux_modules(cfg, game_dir, source):
         missing = [k for k in AUX_REQUIRED_KEYS if k not in entry]
         if missing:
             raise ValueError("%s: [modules.aux.%s] missing keys: %s" % (source, key, ", ".join(missing)))
-        base, size = int(entry["base"]), int(entry["size"])
-        if base % 0x1000 or size <= 0 or base + size > guest_size:
-            raise ValueError("%s: [modules.aux.%s] base %#x size %#x must fit below guest_size %#x"
-                             % (source, key, base, size, guest_size))
+        base, size = entry["base"], entry["size"]
+        if (type(base) is not int or type(size) is not int or base < 0x10000 or base % 0x10000
+                or size <= 0 or base + size > game["heap_base"]):
+            raise ValueError("%s: [modules.aux.%s] base/size must be 64 KB aligned at or above 0x10000 and end below heap_base"
+                             % (source, key))
+        if any(base < m["base"] + m["size"] and m["base"] < base + size for m in modules):
+            raise ValueError("%s: [modules.aux.%s] overlaps another module" % (source, key))
         alignment = entry.get("function_alignment", 4)
         if type(alignment) is not int or alignment <= 0:
             raise ValueError("%s: [modules.aux.%s] function_alignment must be a positive integer" % (source, key))

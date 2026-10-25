@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Relocate auxiliary PE32 DLLs to configured load bases with validated
+  HIGHLOW relocations in both translator and loader. Map every module before
+  binding imports, attach imported DLLs before their dependents, retain their
+  references until unload, and pin static EXE imports before TLS/entry.
+  Failed attaches unwind dependencies. Auxiliary ranges must be 64 KB
+  aligned, non-overlapping and below the guest heap. Fixes #28.
+
 - Support `[game] exe_dir = "Binaries"` (including nested folders). Runtime
   paths and DLL names retain the executable's folder while game data,
   launcher imports, setup links and mobile/web staging use the enclosing

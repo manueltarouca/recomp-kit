@@ -219,8 +219,8 @@ class LoadTests(unittest.TestCase):
 
     def test_auxiliary_modules_and_guest_size(self):
         """[modules.aux.<key>] names a DLL the guest loads at run time that the kit
-        translates as a second image at its preferred base; [game] guest_size
-        grows the arena to hold it. Defaults: no modules, 0x10000000."""
+        translates at a configured load base below the heap. Defaults: no
+        modules and a 0x10000000 arena."""
         base = game_config.load(ROOT / "games/stub")
         self.assertEqual(base["aux_modules"], [])
         self.assertEqual(base["game"]["guest_size"], 0x10000000)
@@ -232,7 +232,7 @@ class LoadTests(unittest.TestCase):
             text = (ROOT / "games/stub/game.toml").read_text()
             text = text.replace('guest_root = ', 'guest_size = 0x10100000\nguest_root = ', 1)
             text += ('\n[modules.aux.blit]\nname = "Blit_p6.dll"\npath = "original/Blit_p6.dll"\n'
-                     'sha256 = "%s"\nbase = 0x10000000\nsize = 0x28000\nlistings = "analysis/Blit_p6.dll"\nfunction_alignment = 1\n' % ("ab" * 32))
+                     'sha256 = "%s"\nbase = 0x00020000\nsize = 0x28000\nlistings = "analysis/Blit_p6.dll"\nfunction_alignment = 1\n' % ("ab" * 32))
             (game / "game.toml").write_text(text)
             (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
             cfg = game_config.load(game)
@@ -244,26 +244,30 @@ class LoadTests(unittest.TestCase):
             self.assertEqual(mod["listings_path"], (game / "analysis/Blit_p6.dll").resolve())
             self.assertEqual(mod["function_alignment"], 1)
             self.assertEqual(mod["entry_points"], [])
-            self.assertEqual((mod["base"], mod["size"]), (0x10000000, 0x28000))
+            self.assertEqual((mod["base"], mod["size"]), (0x20000, 0x28000))
             header = gen_game_config.render_header(cfg)
             self.assertIn("#define RECOMP_GUEST_SIZE 0x10100000u", header)
             self.assertIn("#define RECOMP_AUX_MODULE_COUNT 1", header)
-            self.assertIn('{"Blit_p6.dll", "%s", "%s", 0x10000000u, 0x00028000u}' % ((game / "original/Blit_p6.dll").resolve().as_posix(), "ab" * 32),
+            self.assertIn('{"Blit_p6.dll", "%s", "%s", 0x00020000u, 0x00028000u}' % ((game / "original/Blit_p6.dll").resolve().as_posix(), "ab" * 32),
                           header)
             cmake = gen_game_config.render_cmake(cfg)
             self.assertIn("set(RECOMP_GUEST_SIZE 0x10100000u)", cmake)
             self.assertIn("set(RECOMP_AUX_MODULES blit)", cmake)
-            (game / "game.toml").write_text(text + 'entry_points = [0x10001234]\n')
+            (game / "game.toml").write_text(text + 'entry_points = [0x00021234]\n')
             self.assertEqual(game_config.load(game)["aux_modules"][0]["entry_points"],
-                             [0x10001234])
-            for entries in ('[0x0fffffff]', '[0x10028000]', '["0x10001234"]', '7'):
+                             [0x00021234])
+            for entries in ('[0x1ffff]', '[0x48000]', '["0x21234"]', '7'):
                 (game / "game.toml").write_text(text + 'entry_points = ' + entries + '\n')
                 with self.assertRaises(ValueError):
                     game_config.load(game)
-            bad = text.replace('guest_size = 0x10100000', 'guest_size = 0x10000000')
-            (game / "game.toml").write_text(bad)
-            with self.assertRaises(ValueError):
-                game_config.load(game)   # a module needs an arena that reaches it: checked at load
+            for bad_base in ('0', '0x1000', '0x21000', '0x10000000', 'true'):
+                (game / "game.toml").write_text(text.replace('base = 0x00020000', 'base = ' + bad_base), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "base/size"):
+                    game_config.load(game)
+            duplicate = text[text.index('[modules.aux.blit]'):].replace('[modules.aux.blit]', '[modules.aux.other]')
+            (game / "game.toml").write_text(text + '\n' + duplicate, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "overlaps"):
+                game_config.load(game)
 
     def test_mm_timer_mode(self):
         cfg = game_config.load(ROOT / "games/stub")

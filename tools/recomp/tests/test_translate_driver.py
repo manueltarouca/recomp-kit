@@ -250,7 +250,7 @@ def test_output_records_the_loaded_image_base(tmp_path, monkeypatch, artifact, p
     monkeypatch.setattr(T, "FUNCS_TSV", str(table))
     monkeypatch.setattr(T, "BINARY", str(binary))
     monkeypatch.setattr(T, "CURATED", str(curated))
-    monkeypatch.setattr(T, "Image", lambda path: img)
+    monkeypatch.setattr(T, "Image", lambda path, **kwargs: img)
     monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
                                      "--out", str(out), "--report", str(report), "--quiet"])
     assert T.main() == 0
@@ -1470,6 +1470,7 @@ def test_auxiliary_module_emits_prefixed_tables_that_self_register(tmp_path, mon
     monkeypatch.setattr(T, "EXTRA_ENTRY_POINTS", frozenset())
     monkeypatch.setattr(T, "Image", lambda path: img)
     monkeypatch.setattr(T, "SYMBOL_PREFIX", "recomp_blit_")
+    monkeypatch.setattr(T, "Image", lambda path, **kwargs: img)
     monkeypatch.setattr(T, "AUX_MODULE", {"key": "blit", "name": "Blit_p6.dll", "base": 0x10000000, "size": 0x1000})
     monkeypatch.setattr(sys, "argv", ["translate.py", "--game", str(tmp_path),
                                      "--out", str(out), "--quiet"])

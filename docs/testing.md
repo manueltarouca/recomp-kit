@@ -5,6 +5,12 @@ as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
 event timers without a message loop, callback cancellation/replacement,
 worker exit/restart, periodic cadence, pinned time and shutdown.
 
+`loader_module_tests` maps hash-verified synthetic DLL files, checks relocated
+memory and IAT binding with the importer mapped first, then exercises dependency
+attach/detach order, reload, cycles, failed initialization and static pinning.
+It runs without game files under `nogame`. `test_translate_relocate.py` checks
+PE32 relocation validation and generated module output at its new base.
+
 `hardware_tests` checks configured desktop, display enumeration, adapter
 identity and memory through the guest API. `guest_layout_tests` checks
 both root/nested EXE layouts, the suffix-mismatch fallback, DLL/command-line/
