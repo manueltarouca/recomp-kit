@@ -390,6 +390,12 @@ bool host_messages_pending();
 // Blocks the calling guest thread for `ms` and lets the other guest threads
 // run. GetMessageA uses it so waiting for a message is a real wait.
 void guest_sleep_ms(uint32_t ms);
+// Runtime-owned cooperative workers bypass CreateThread's diagnostic sync/skip
+// modes. Creation/inspection/close require the guest baton; event signalling
+// from a host thread uses guest_event_signal_from_host below.
+uint32_t guest_runtime_thread_create(uint32_t start, uint32_t param);
+bool guest_runtime_thread_alive(uint32_t handle);
+bool win32_close_handle(uint32_t handle);
 // WaitForMultipleObjects for the calling guest thread: WAIT_OBJECT_0 + i,
 // WAIT_ABANDONED_0 + i, WAIT_TIMEOUT (0x102) or WAIT_FAILED. A zero timeout
 // answers from the current state, taking what it reports as Windows does.
@@ -525,10 +531,16 @@ void host_midi_close(void);
 }
 
 // ---------------------------------------------------------------------------
-// WINMM multimedia timers: the host fires due callbacks between frames, on the
-// main thread, through the guest callback registered by timeSetEvent.
+// WINMM multimedia timers: by default the message pump fires callbacks. With
+// [system] mm_timers="thread", a cooperative runtime worker owns callbacks;
+// this pump still drives host frame services, without firing a timer twice.
 // ---------------------------------------------------------------------------
 void host_pump_timers(X86 *c);
+// Stop is safe from a host thread before driving shutdown. Reset requires
+// every worker to have stopped and runs before the handle registry is reset.
+void host_stop_mm_timer_thread();
+void host_reset_mm_timers();
+void host_mm_timer_thread_for_test(bool enabled);
 
 // ---------------------------------------------------------------------------
 // Registry: backed by build/recomp/registry.json (path overridable with

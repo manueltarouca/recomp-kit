@@ -54,6 +54,7 @@ def render_header(cfg):
     controls = cfg["controls"]
     lines.append("#define RECOMP_CONTROLS_DEFAULT_LAYOUT %s" % c_string(controls["default_layout"]))
     lines.append("#define RECOMP_CONTROLS_PAD %d" % ("off", "mapped", "native").index(controls["pad"]))
+    lines.append("#define RECOMP_MM_TIMER_THREAD %d" % (cfg["system"]["mm_timers"] == "thread"))
     lines.append("#define RECOMP_CONTROLS_MAPPED %s" % c_string(
         ";".join("%s=%s" % (k, controls["mapped"][k]) for k in sorted(controls["mapped"]))))
     native = controls["native"]

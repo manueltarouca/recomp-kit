@@ -99,6 +99,14 @@ indirect setjmp calls retain the runtime's explicit failure path. An empty
 table disables substitutions, while omitting it retains existing-port defaults.
 An executable's pair is cleared when translating an auxiliary module.
 
+Multimedia timers default to the guest message pump. A game can select
+`[system] mm_timers = "thread"` to run them on a runtime-owned cooperative
+worker with its own guest stack and TLS. It waits on an event until the next
+deadline, so creating or cancelling a timer wakes it. Frame services remain
+on the message-pump path. Periodic timers retain their phase and skip missed
+intervals after one catch-up callback. Timer deadlines use the actual pinned
+clock when one is active. Hosts stop the worker before driving guest shutdown.
+
 Static discovery is a guess about where code is, and it misses some: a
 function only ever reached through a pointer nothing resolves, a jump-table
 slot no listing owns, a block Ghidra ended early. Each shows up at run time as

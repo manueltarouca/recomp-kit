@@ -76,6 +76,8 @@ pop_optimize(runtime_tests 1)
 pop_test_binary(runtime_tests)
 add_test(NAME runtime_tests COMMAND runtime_tests WORKING_DIRECTORY ${POP_ROOT})
 add_test(NAME runtime_pulse_tests COMMAND runtime_tests --pulse-only WORKING_DIRECTORY ${POP_ROOT})
+add_test(NAME runtime_mm_timer_tests COMMAND runtime_tests --mm-timers-only WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(runtime_mm_timer_tests PROPERTIES LABELS nogame TIMEOUT 30)
 set_tests_properties(runtime_pulse_tests PROPERTIES LABELS nogame TIMEOUT 30)
 # TIMEOUT for the reason interp_tests has one: this suite also runs guest
 # code through the interpreter. It takes two seconds when that returns.

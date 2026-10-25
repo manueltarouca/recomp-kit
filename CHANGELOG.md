@@ -21,6 +21,12 @@
   and XInput pad only while a physical controller is connected. It defaults
   to false, preserving existing virtual-pad behavior. Fixes #14.
 
+- Add `[system] mm_timers = "thread"` for multimedia callbacks on a runtime
+  cooperative guest worker, including event timers. Games can wait for a timer
+  before entering their message loop. The default remains `"message_loop"`.
+  Thread mode preserves periodic cadence, honors pinned time and stops before
+  host shutdown. Fixes #16.
+
 - Add a Direct3D 8 frontend with version 8 interfaces and structure layouts,
   FVF and vertex-declaration conversion, vs_1_1/ps_1_1 shader handles, and
   generated unlit fixed-function programs shared by the CPU and GPU renderers.

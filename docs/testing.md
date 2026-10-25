@@ -1,5 +1,10 @@
 # Testing
 
+`runtime_tests --mm-timers-only` runs without a game image and is registered
+as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
+event timers without a message loop, callback cancellation/replacement,
+worker exit/restart, periodic cadence, pinned time and shutdown.
+
 `d3d8_tests` exercises the Direct3D 8 guest vtables, stack cleanup, structure
 sizes, resource ownership, shader handles and actual CPU draw pixels.
 `d3d8_program_tests` checks FVF/declaration decoding, bounded shader parsing,
@@ -8,6 +13,9 @@ label. `host_tests --d3d9-gpu` runs the same combiner cases on the active GPU
 backend (Metal on Apple platforms, Vulkan on Windows/Linux). These are
 offscreen correctness checks; they do not establish game compatibility or
 playable performance.
+
+The `gpu` label includes `d3d9_gpu_tests` (`host_tests --d3d9-gpu`), so the
+Direct3D 8 combiner cases also run in the Metal and Vulkan CI jobs.
 
 Run checks appropriate to your change. Every suite's output belongs under ignored
 `build/`; requested tests must report failure rather than silently skip prerequisites.

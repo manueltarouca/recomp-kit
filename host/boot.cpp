@@ -576,6 +576,7 @@ void boot_run() {
         mods_write_run_record(host_state_file("mods/run.json").c_str());
 
     mods_shutdown_request();
+    host_stop_mm_timer_thread();
     // The abandoned frames go FIRST, and unconditionally: this thread has left
     // guest code, so any mod invocation still recorded for it was abandoned by
     // a longjmp - a guest ExitProcess inside a hooked call is the case that

@@ -141,6 +141,7 @@ bool g_mods_ever_live = false;
 // Revoke mods and complete fixture teardown after guest workers stop.
 // Repeated cleanup must preserve the first populated run record and never unload an active callback.
 void fixture_mods_teardown() {
+    host_stop_mm_timer_thread();
     // A run that never had a lifecycle records here, because nothing else
     // will: a RECOMP_NO_MODS fixture run does not reach the loader at all, and
     // Gate A's runs would otherwise be the only ones with no metadata.
@@ -158,6 +159,10 @@ void fixture_mods_teardown() {
         static bool recorded = false;
         if (!recorded) {
             recorded = true;
+            sched_run_thread_unwind_frames();
+            sched_run_thread_finished();
+            sched_drive_until_stopped(2.0);
+            sched_drive_release();
             mods_write_run_record(host_state_file("mods/run.json").c_str());
         }
         return;

@@ -539,6 +539,7 @@ uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
 }
 
 void win32_init(const std::string &game_dir) {
+    host_reset_mm_timers();
     kernel32_wide_reset();
     g_game_dir = game_dir.empty() ? std::string(".") : game_dir;
     g_cur_dir = RECOMP_GUEST_ROOT;
@@ -925,20 +926,11 @@ void k_GetFileSize(X86 *c) {
 }
 
 void k_CloseHandle(X86 *c) {
-    uint32_t h = arg(c, 0);
-    HObj *o = handle_any(h);
-    if (!o) {
+    if (!win32_close_handle(arg(c, 0))) {
         set_last_error(ERROR_INVALID_HANDLE_);
         set_eax(c, 0);
         return;
     }
-    if (--o->references) {
-        set_eax(c, 1);
-        return;
-    }
-    if ((o->kind == H_FILE || o->kind == H_MAPPING) && o->fd >= 0)
-        os_fd_close(o->fd);
-    handles().erase(h);
     set_eax(c, 1);
 }
 
@@ -3468,6 +3460,39 @@ void k_UnhandledExceptionFilter(X86 *c) {
 // delivered anywhere. Continuing would run the guest past a point it never
 // reaches on Windows, so both abort with the state that caused them.
 } // namespace
+
+bool win32_close_handle(uint32_t handle) {
+    HObj *o = handle_any(handle);
+    if (!o)
+        return false;
+    if (--o->references)
+        return true;
+    if ((o->kind == H_FILE || o->kind == H_MAPPING) && o->fd >= 0)
+        os_fd_close(o->fd);
+    handles().erase(handle);
+    return true;
+}
+
+uint32_t guest_runtime_thread_create(uint32_t start, uint32_t param) {
+    const uint32_t h = handle_new(H_THREAD);
+    handles()[h].thread_start = start;
+    handles()[h].thread_param = param;
+    handles()[h].exit_code = STILL_ACTIVE_;
+    if (!thread_spawn(h)) {
+        handles().erase(h);
+        return 0;
+    }
+    handles()[h].thread_ran = true;
+    return h;
+}
+
+bool guest_runtime_thread_alive(uint32_t handle) {
+    std::lock_guard<std::mutex> lock(g_sched_m);
+    for (GuestThread *thread : threads())
+        if (thread->handle == handle)
+            return !thread->finished;
+    return false;
+}
 
 static bool printable_guest_string(uint32_t a, std::string *out) {
     if (!a || !gm_valid(a, 1))
