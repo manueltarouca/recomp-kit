@@ -153,6 +153,14 @@ def load(game_dir):
     game["heap_base"] = validate_heap_base(int(game.get("heap_base", HEAP_BASE_DEFAULT)))
     windows_version(game.setdefault("windows_version", "4.10"))
     translate = cfg.setdefault("translate", {})
+    intrinsics = translate.get("intrinsics")
+    if intrinsics is not None:
+        if not isinstance(intrinsics, dict) or (intrinsics and set(intrinsics) != {"setjmp", "longjmp"}):
+            raise ValueError("%s: [translate] intrinsics must name the setjmp/longjmp pair, or be empty" % source)
+        if any(type(value) is not int or not 0 < value <= 0xffffffff for value in intrinsics.values()):
+            raise ValueError("%s: [translate] intrinsic addresses must be nonzero 32-bit integers" % source)
+        if len(set(intrinsics.values())) != len(intrinsics):
+            raise ValueError("%s: [translate] intrinsic addresses must be distinct" % source)
     resumable = translate.setdefault("resumable_stacks", False)
     if not isinstance(resumable, bool):
         raise ValueError("%s: [translate] resumable_stacks must be a boolean" % source)

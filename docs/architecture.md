@@ -86,6 +86,14 @@ guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choic
 
 ## Discovery, and code a build does not carry
 
+A port can audit its CRT pair and set `[translate] intrinsics` to a table
+containing `setjmp` and `longjmp` guest addresses. These replace both CRT
+bodies with runtime intrinsics and remove alternate entries inside them.
+Direct setjmp calls save the host jump buffer in their caller's live frame;
+indirect setjmp calls retain the runtime's explicit failure path. An empty
+table disables substitutions, while omitting it retains existing-port defaults.
+An executable's pair is cleared when translating an auxiliary module.
+
 Static discovery is a guess about where code is, and it misses some: a
 function only ever reached through a pointer nothing resolves, a jump-table
 slot no listing owns, a block Ghidra ended early. Each shows up at run time as

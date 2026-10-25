@@ -98,6 +98,7 @@ def configure_module(cfg, key):
     FUNCTION_ALIGNMENT = mod["function_alignment"]
     SYMBOL_PREFIX = "recomp_%s_" % key
     AUX_MODULE = mod
+    configure_intrinsics({})  # An executable's CRT addresses do not belong to its DLLs.
 
 
 def read_discovered(path):
@@ -120,6 +121,8 @@ def read_discovered(path):
 def configure(cfg):
     """Point the translator at one game's listings, binary and audited reads."""
     global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
+    global SYMBOL_PREFIX, AUX_MODULE
+    SYMBOL_PREFIX, AUX_MODULE = "recomp_", None
     listings = str(cfg["listings_path"])
     LISTINGS = os.path.join(listings, "functions")
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
@@ -129,6 +132,7 @@ def configure(cfg):
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
     global RESUMABLE_STACKS
+    configure_intrinsics(cfg["translate"].get("intrinsics"))
     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
     EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
     FUNCTION_ALIGNMENT = cfg["translate"].get("function_alignment", 16)
@@ -301,6 +305,25 @@ INTRINSIC_BODY = {
     INTRINSIC_LONGJMP: "recomp_longjmp(c);",
     INTRINSIC_SETJMP:  "recomp_setjmp(c);",   # single-call fallback, indirect only
 }
+LEGACY_INTRINSICS = {"setjmp": INTRINSIC_SETJMP, "longjmp": INTRINSIC_LONGJMP}
+
+
+def configure_intrinsics(values):
+    """Select an audited CRT pair; omission retains existing-port defaults.
+
+    An explicit empty map disables substitutions. Always reset both addresses
+    so configuring another executable or auxiliary module cannot leak a pair.
+    """
+    global INTRINSIC_SETJMP, INTRINSIC_LONGJMP, INTRINSIC_BODY
+    values = LEGACY_INTRINSICS if values is None else values
+    INTRINSIC_SETJMP = values.get("setjmp")
+    INTRINSIC_LONGJMP = values.get("longjmp")
+    INTRINSIC_BODY = {address: "recomp_%s(c);" % name for name, address in values.items()}
+
+
+def intrinsic_alternates_removed(entries):
+    """A replaced CRT body has only its canonical entry, with no labels inside."""
+    return {address: fn for address, fn in entries.items() if fn.addr not in INTRINSIC_BODY}
 
 # --------------------------------------------------------------- registers --
 
@@ -2646,6 +2669,11 @@ class Translator(object):
         is strict and a target that is still not an instruction boundary is an
         error."""
         fn.index = {ins.addr: k for k, ins in enumerate(fn.insns)}
+        if fn.addr in INTRINSIC_BODY:
+            self.strict = strict
+            fn.pushed_continuations = set()
+            fn.seh_sites = fn.seh_restores = {}
+            return
         fn.pushed_continuations = self.live_continuations(fn)
         fn.seh_sites = seh_frame_sites(fn, self.image)
         fn.seh_restores = seh_restore_sites(fn)
@@ -2669,6 +2697,10 @@ class Translator(object):
         of those, the body becomes `static void body_ADDR(X86 *, uint32_t)`
         preceded by a dispatch switch, and every entry is a three-line wrapper,
         so no code is duplicated."""
+        if fn.addr in INTRINSIC_BODY:
+            self.stats["_intrinsic_body"] += 1
+            return ["/* runtime intrinsic */",
+                    "void fn_%08x(X86 *c) { %s }" % (fn.addr, INTRINSIC_BODY[fn.addr])]
         entries = sorted(set(entries))
         # An alternate entry must be an instruction in THIS body.  A block can
         # be re-recovered between the discovery rounds and the final pass -
@@ -2726,10 +2758,6 @@ class Translator(object):
             labels.add(e)
 
         out = []
-        if fn.addr in INTRINSIC_BODY:
-            self.stats["_intrinsic_body"] += 1
-            return ["/* runtime intrinsic */",
-                    "void fn_%08x(X86 *c) { %s }" % (fn.addr, INTRINSIC_BODY[fn.addr])]
         # Following branches can pull in addresses BELOW the entry, so the
         # first instruction in address order is not necessarily where this
         # function starts.  Jump to the entry explicitly rather than falling
@@ -5358,6 +5386,7 @@ def main():
                     if nxt in owner and nxt not in starts:
                         extra[nxt] = owner[nxt]
 
+    extra = intrinsic_alternates_removed(extra)
     entries_by_fn = defaultdict(set)
     for t, fn in extra.items():
         entries_by_fn[fn.addr].add(t)
@@ -5629,6 +5658,7 @@ def main():
         ok = [fn for fn in ok if fn.addr in seeds]
         bodies = {a: b for a, b in bodies.items() if a in seeds}
         extra = {t: f for t, f in extra.items() if f.addr in seeds}
+    extra = intrinsic_alternates_removed(extra)
     entry_names = sorted(set([fn.addr for fn in ok])
                          | set(t for t, f in extra.items() if f.addr in bodies))
     if args.as_module:

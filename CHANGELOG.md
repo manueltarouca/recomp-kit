@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Let a port name its CRT `setjmp`/`longjmp` pair in
+  `[translate] intrinsics = { setjmp = ..., longjmp = ... }`. Direct setjmp
+  calls save the host frame in the caller, and substituted bodies export no
+  invalid alternate entries. Auxiliary modules do not inherit EXE addresses.
+  Fixes #19.
+
 - Recover jump-table targets before a function's entry when its listing
   starts earlier, and decode byte index tables guarded through a LEA-derived
   bound. Register-clobber checks prevent stale bounds. Fixes #18.
