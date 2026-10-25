@@ -543,6 +543,29 @@ static void test_script_parsing() {
     HostScriptStep steps[64];
     char err[256];
 
+    // Windows checkouts and text writers produce CRLF; the same script must
+    // retain its steps, timestamps and strict token checks on every host.
+    HostScriptStep lf_steps[64], crlf_steps[64];
+    const int lf_count =
+        host_script_parse("# comment\nwait 25\nkey RETURN down\n\nmove 10 20\nkey RETURN up\n",
+                          lf_steps, 64, err, sizeof err);
+    const int crlf_count = host_script_parse(
+        "# comment\r\nwait 25\r\nkey RETURN down\r\n\r\nmove 10 20\r\nkey RETURN up\r\n",
+        crlf_steps, 64, err, sizeof err);
+    CHECK_EQ(lf_count, 3);
+    CHECK_EQ(crlf_count, lf_count);
+    if (crlf_count == lf_count)
+        CHECK(memcmp(lf_steps, crlf_steps, lf_count * sizeof(HostScriptStep)) == 0);
+    CHECK_EQ(host_script_parse("wait 5\r", steps, 64, err, sizeof err), 0);
+    CHECK_EQ(host_script_parse("\r\n\r", steps, 64, err, sizeof err), 0);
+    CHECK_EQ(host_script_parse("wait 5\r\nwait 1\r2\r\n", steps, 64, err, sizeof err), -1);
+    CHECK(strstr(err, "line 2") != nullptr);
+    CHECK_EQ(
+        host_script_parse((std::string(511, '#') + "\r\n").c_str(), steps, 64, err, sizeof err), 0);
+    CHECK_EQ(
+        host_script_parse((std::string(512, '#') + "\r\n").c_str(), steps, 64, err, sizeof err),
+        -1);
+
     CHECK_EQ(host_script_parse("tap 24 8\nwait 2000\ntap 510 90\n", steps, 64, err, sizeof err), 2);
     CHECK_EQ(steps[0].op, HOST_SCRIPT_TAP);
     CHECK_EQ(steps[0].x, 24);
@@ -1174,7 +1197,9 @@ static void test_controls_layouts_resource() {
     char dir[512];
     snprintf(dir, sizeof dir, "%s/controls-resource-XXXXXX", os_temp_dir());
     CHECK(os_mkdtemp(dir) == 0);
-    const std::string root = dir;
+    std::string root = dir;
+    // Resource paths use forward slashes on Windows as well.
+    std::replace(root.begin(), root.end(), '\\', '/');
     os_mkdir((root + "/build").c_str());
     FILE *f = fopen((root + "/game.toml").c_str(), "wb");
     CHECK(f != nullptr);

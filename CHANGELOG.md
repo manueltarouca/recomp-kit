@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept Windows CRLF line endings in smoke scripts, including blank lines
+  and a final line without LF, while retaining strict numeric parsing.
+
 - Report the per-key press edge from GetAsyncKeyState alongside its current
   down state, including a press released between polls. Polling consumes the
   edge; repeated down events do not create another press.
