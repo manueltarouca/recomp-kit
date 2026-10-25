@@ -27,7 +27,7 @@ zero-fills data tails and replaces import-table entries with runtime trampolines
 Native platforms reserve the full 4 GiB address range plus a 64 KiB upper
 guard, exposing only `[game] guest_size` bytes. Sizes are 64 KiB aligned,
 between 256 MiB and 0xffff0000. The heap ceiling, stack, TEB, shims, callback
-sentinel and mod heap derive from that size; mod allocations stop below the
+sentinel and mod heap derive from the available runtime range; mod allocations stop below the
 eight-megabyte guest stack. Debug builds compile low-page checks into memory
 helpers; `RECOMP_NULL_FAULTS=1` arms the guest access violation. wasm32 retains
 a plain allocation because it cannot reserve the full native address range.
@@ -39,8 +39,12 @@ not host pointers and not evidence of human-recovered intent.
 
 A game that ships part of its code as a DLL can name it in game.toml as an
 auxiliary module (`[modules.aux.<key>]`). The loader maps it beside the image
-at a configured, validated load base below the heap. `[game] guest_size`
-can grow the arena while moving its runtime regions together. The translator turns the module into its own
+at a configured, validated load base below the heap or above all runtime
+allocations. `[game] guest_size` can grow the arena to cover high DLLs.
+`GUEST_LAYOUT_END` caps the runtime regions at the lowest high DLL base, so
+the heap, mod heap, stacks, TEB and shims cannot collide with those images.
+Without a high DLL the layout still derives from the full arena size.
+The translator turns the module into its own
 generated library with prefixed tables that register with the runtime at
 start-up; `recomp_call` and `recomp_jump` consult that registry after the
 image's own table misses, so calls in either direction cross the boundary
@@ -146,8 +150,9 @@ base. Translator and loader both accept PE32 HIGHLOW relocations and ABSOLUTE
 padding, rejecting missing/malformed directories and unsupported or invalid
 sites when rebasing. The translator re-decodes listed instruction starts from
 relocated bytes, preserving non-pointer constants and relative branch targets.
-Ranges start on a 64 KB boundary at or above 0x10000, end below `heap_base`,
-and cannot overlap another mapped image. All modules map before any IAT binds.
+Ranges start on a 64 KB boundary at or above 0x10000, fit the arena, end below
+`heap_base` or start at/above `GUEST_LAYOUT_END`, and cannot overlap another
+mapped image. All modules map before any IAT binds.
 Mapped imports own dependency references; DLL_PROCESS_ATTACH runs dependencies
 first, DLL_PROCESS_DETACH releases them in reverse order, and fresh loads restore
 the relocated, bound image. Cyclic back edges do not acquire duplicate lifetime

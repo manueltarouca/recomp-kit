@@ -299,7 +299,8 @@ def load_aux_modules(cfg, game_dir, source):
     relative to game.toml), sha256, base and size (the load address and reserved
     image size), listings (Ghidra export directory, relative), and
     function_alignment (default 4). Modules must not overlap, must be 64 KB
-    aligned, and must fit below the guest heap."""
+    aligned, and must fit below the heap or above all runtime allocations.
+    High modules cap the runtime layout, independently of the arena size."""
     game = cfg["game"]
     guest_size = validate_guest_size(game.setdefault("guest_size", GUEST_SIZE_DEFAULT))
     game["guest_size"] = guest_size
@@ -310,8 +311,9 @@ def load_aux_modules(cfg, game_dir, source):
             raise ValueError("%s: [modules.aux.%s] missing keys: %s" % (source, key, ", ".join(missing)))
         base, size = entry["base"], entry["size"]
         if (type(base) is not int or type(size) is not int or base < 0x10000 or base % 0x10000
-                or size <= 0 or base + size > game["heap_base"]):
-            raise ValueError("%s: [modules.aux.%s] base/size must be 64 KB aligned at or above 0x10000 and end below heap_base"
+                or size <= 0 or base + size > guest_size
+                or (base + size > game["heap_base"] and base < GUEST_SIZE_DEFAULT)):
+            raise ValueError("%s: [modules.aux.%s] base/size must be 64 KB aligned at or above 0x10000, fit the arena, and avoid runtime regions"
                              % (source, key))
         if any(base < m["base"] + m["size"] and m["base"] < base + size for m in modules):
             raise ValueError("%s: [modules.aux.%s] overlaps another module" % (source, key))
@@ -330,4 +332,10 @@ def load_aux_modules(cfg, game_dir, source):
             "function_alignment": alignment,
             "entry_points": entries,
         })
+    # Keep every allocating region (including mod memory, stacks and shims)
+    # below high DLLs. Enlarging the arena to map a DLL must not move a shim
+    # table or a stack into that very DLL's preferred address range.
+    game["layout_end"] = min([guest_size] + [m["base"] for m in modules
+                                            if m["base"] >= game["heap_base"]])
+    validate_heap_base(game["heap_base"], game["layout_end"])
     return modules

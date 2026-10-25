@@ -427,15 +427,16 @@ bool load_aux_module(const AuxSpec &spec) {
     uint32_t size_image = rd<uint32_t>(file, opt_off + 56);
     uint32_t size_hdrs = rd<uint32_t>(file, opt_off + 60);
     if (!size_image || size_image > spec.size || image_base < 0x10000 || image_base % 0x10000 ||
-        uint64_t(image_base) + spec.size > GUEST_HEAP_BASE || size_hdrs > size_image ||
-        entry_rva >= size_image ||
+        !gm_valid(image_base, spec.size) ||
+        (uint64_t(image_base) + spec.size > GUEST_HEAP_BASE && image_base < GUEST_LAYOUT_END) ||
+        size_hdrs > size_image || entry_rva >= size_image ||
         (g_base && image_base < uint64_t(g_base) + g_size &&
          g_base < uint64_t(image_base) + spec.size)) {
         char buf[200];
-        snprintf(
-            buf, sizeof buf,
-            "%s: [%08x, %08x) does not fit a free configured range below the heap [%08x, %08x)",
-            spec.name, image_base, image_base + size_image, spec.base, spec.base + spec.size);
+        snprintf(buf, sizeof buf,
+                 "%s: [%08x, %08x) does not fit a free configured range outside runtime regions "
+                 "[%08x, %08x)",
+                 spec.name, image_base, image_base + size_image, spec.base, spec.base + spec.size);
         g_error = buf;
         return false;
     }

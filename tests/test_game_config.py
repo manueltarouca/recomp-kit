@@ -261,7 +261,7 @@ class LoadTests(unittest.TestCase):
 
     def test_auxiliary_modules_and_guest_size(self):
         """[modules.aux.<key>] names a DLL the guest loads at run time that the kit
-        translates at a configured load base below the heap. Defaults: no
+        translates below the heap or above all runtime regions. Defaults: no
         modules and a 0x10000000 arena."""
         base = game_config.load(ROOT / "games/stub")
         self.assertEqual(base["aux_modules"], [])
@@ -302,7 +302,7 @@ class LoadTests(unittest.TestCase):
                 (game / "game.toml").write_text(text + 'entry_points = ' + entries + '\n')
                 with self.assertRaises(ValueError):
                     game_config.load(game)
-            for bad_base in ('0', '0x1000', '0x21000', '0x10000000', 'true'):
+            for bad_base in ('0', '0x1000', '0x21000', '0x10100000', 'true'):
                 (game / "game.toml").write_text(text.replace('base = 0x00020000', 'base = ' + bad_base), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "base/size"):
                     game_config.load(game)
@@ -310,6 +310,32 @@ class LoadTests(unittest.TestCase):
             (game / "game.toml").write_text(text + '\n' + duplicate, encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "overlaps"):
                 game_config.load(game)
+
+    def test_auxiliary_modules_above_runtime_regions(self):
+        """High DLLs must leave heap, stacks, TEB and shims below their load base."""
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            text = (ROOT / "games/stub/game.toml").read_text(encoding="utf-8")
+            text = text.replace('guest_root = ', 'guest_size = 0x10100000\nguest_root = ', 1)
+            text += ('\n[modules.aux.high]\nname = "high.dll"\npath = "original/high.dll"\n'
+                     'sha256 = "%s"\nbase = 0x10000000\nsize = 0x28000\n' % ("ab" * 32))
+            (game / "globals.toml").write_bytes((ROOT / "games/stub/globals.toml").read_bytes())
+            config = game / "game.toml"
+            config.write_text(text, encoding="utf-8")
+            cfg = game_config.load(game)
+            self.assertEqual(cfg["game"]["layout_end"], 0x10000000)
+            self.assertIn("#define RECOMP_LAYOUT_END 0x10000000u", gen_game_config.render_header(cfg))
+            self.assertIn("set(RECOMP_LAYOUT_END 0x10000000u)", gen_game_config.render_cmake(cfg))
+            for bad in (text.replace('base = 0x10000000', 'base = 0x0fff0000'),
+                        text.replace('base = 0x10000000', 'base = 0x00ff0000'),
+                        text.replace('size = 0x28000', 'size = 0x110000')):
+                config.write_text(bad, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    game_config.load(game)
+            config.write_text(text.replace('guest_size = 0x10100000',
+                                           'guest_size = 0x80000000').split('[modules.aux.high]')[0],
+                              encoding="utf-8")
+            self.assertEqual(game_config.load(game)["game"]["layout_end"], 0x80000000)
 
     def test_mm_timer_mode(self):
         cfg = game_config.load(ROOT / "games/stub")

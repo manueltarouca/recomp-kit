@@ -64,12 +64,17 @@ extern uint8_t *g_mem;
 #ifndef GUEST_HEAP_BASE
 #define GUEST_HEAP_BASE 0x01000000u
 #endif
-#define GUEST_HEAP_END (GUEST_SIZE - 0x02000000u)
-#define GUEST_STACK_TOP (GUEST_SIZE - 0x01000000u)
+/* The mapped arena may extend past a high DLL. All runtime allocations end
+ * below that DLL, so growing the arena cannot move stacks/shims into its code. */
+#ifndef GUEST_LAYOUT_END
+#define GUEST_LAYOUT_END GUEST_SIZE
+#endif
+#define GUEST_HEAP_END (GUEST_LAYOUT_END - 0x02000000u)
+#define GUEST_STACK_TOP (GUEST_LAYOUT_END - 0x01000000u)
 #define GUEST_STACK_SIZE 0x00800000u
-#define GUEST_TEB_BASE (GUEST_SIZE - 0x00200000u)
-#define GUEST_SHIM_BASE (GUEST_SIZE - 0x00100000u)
-#define GUEST_SHIM_END GUEST_SIZE
+#define GUEST_TEB_BASE (GUEST_LAYOUT_END - 0x00200000u)
+#define GUEST_SHIM_BASE (GUEST_LAYOUT_END - 0x00100000u)
+#define GUEST_SHIM_END GUEST_LAYOUT_END
 #define GUEST_SHIM_STRIDE 16u
 #define GUEST_RETURN_SENTINEL (GUEST_TEB_BASE - 0x100u)
 /* Windows maps nothing in the first 64 KB, so a read or a write through a

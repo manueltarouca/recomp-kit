@@ -129,6 +129,14 @@ int main() {
     CHECK(loader_module_count() == 0);
     CHECK(rd32(a_base + 0x1300) == preferred + 0x1000); // invalid relocation wrote no site
     CHECK(!map("a.dll", a, GUEST_SHIM_BASE));
+    CHECK(!map("a.dll", a, GUEST_HEAP_BASE));
+    CHECK(!map("a.dll", a, GUEST_STACK_TOP - 0x10000));
+    if (uint64_t(GUEST_LAYOUT_END) + 0x2000 <= GUEST_SIZE) {
+        CHECK(map("high.dll", b, GUEST_LAYOUT_END));
+        CHECK(rd32(GUEST_LAYOUT_END + 0x1300) == GUEST_LAYOUT_END + 0x1000);
+        CHECK(!map("overlap.dll", b, GUEST_LAYOUT_END));
+        loader_test_reset_modules();
+    }
     CHECK(map("a.dll", a, a_base)); // map importer first, bind only after every DLL exists
     CHECK(map("b.dll", b, b_base));
     CHECK(loader_test_bind_modules());

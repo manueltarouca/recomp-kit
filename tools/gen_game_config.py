@@ -18,7 +18,7 @@ STRINGS = (("id", "RECOMP_GAME_ID"), ("name", "RECOMP_GAME_NAME"), ("app_name", 
            ("sha256", "RECOMP_EXE_SHA256"), ("guest_root", "RECOMP_GUEST_ROOT"),
            ("exe_dir", "RECOMP_EXE_DIR"))
 ADDRESSES = (("image_base", "RECOMP_IMAGE_BASE"), ("entry_point", "RECOMP_ENTRY_POINT"),
-             ("heap_base", "RECOMP_HEAP_BASE"))
+             ("heap_base", "RECOMP_HEAP_BASE"), ("layout_end", "RECOMP_LAYOUT_END"))
 
 
 def c_string(value):
@@ -127,6 +127,7 @@ def render_cmake(cfg):
         lines.append('set(%s "%s")' % (macro, game[key]))
     lines.append("set(RECOMP_IMAGE_BASE %s)" % c_hex(game["image_base"]))
     lines.append("set(RECOMP_HEAP_BASE %s)" % c_hex(game["heap_base"]))
+    lines.append("set(RECOMP_LAYOUT_END %s)" % c_hex(game["layout_end"]))
     lines.append("set(RECOMP_GUEST_SIZE %s)" % c_hex(game["guest_size"]))
     # The generated sources include this header before they define FN_<addr>,
     # which is how a game replaces one translated function with a native one.

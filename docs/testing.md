@@ -54,9 +54,12 @@ derivatives on the selected GPU backend; Metal additionally checks SM3 pixel
 position/face and dividers above one. Vulkan checks clean skips for unsupported
 dividers and misc inputs. WGSL source emission has no browser execution check.
 
-`guest_memory_tests` and `guest_memory_2gb_tests` check readable arena edges
+`guest_memory_tests`, `guest_memory_2gb_tests` and `guest_memory_aux_tests` check readable arena edges
 and subprocess faults above the accessible range, including accesses across
-the highest 32-bit address. `null_guard_tests` checks all scalar accessors
+the highest 32-bit address. The auxiliary layout check keeps a high module's
+marker intact while writing to every runtime region below it. Config tests
+cover high DLLs, low DLLs, reserved-region collisions and full-size layouts
+without high DLLs. `null_guard_tests` checks all scalar accessors
 with debug guards disarmed and armed. `hardening_tests` checks mutation
 refusal without an overlay, profile confinement, canonical symlink escapes
 (when the host permits creating links), and absolute opt-in mod roots.
@@ -92,6 +95,8 @@ inputs for these are exact powers rather than hardware-estimate bit patterns.
 `loader_module_tests` maps hash-verified synthetic DLL files, checks relocated
 memory and IAT binding with the importer mapped first, then exercises dependency
 attach/detach order, reload, cycles, failed initialization and static pinning.
+With a high-module game configuration it also maps and relocates a synthetic
+DLL above `GUEST_LAYOUT_END`, while refusing heap, stack, shim and image overlap.
 It runs without game files under `nogame`. `test_translate_relocate.py` checks
 PE32 relocation validation and generated module output at its new base.
 

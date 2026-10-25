@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve downstream ports whose auxiliary DLLs load above the runtime memory
+  regions. Derive a separate layout ceiling below the first high DLL while
+  retaining the full guarded arena; keep heap, stacks, mod memory and import
+  shims out of those module ranges. Validate both low and high module layouts.
+
 - Add OpenAL playback contexts, shared buffers, sources and queues over the
   host mixer, with clock-driven progress, distance/pan approximation and
   stable pitch/pan updates. Extend Bink with checked memory windows, SDK

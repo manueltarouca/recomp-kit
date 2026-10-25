@@ -4,6 +4,12 @@
 #if defined(TEST_GUEST_SIZE)
 #undef GUEST_SIZE
 #define GUEST_SIZE TEST_GUEST_SIZE
+#undef GUEST_LAYOUT_END
+#define GUEST_LAYOUT_END TEST_GUEST_SIZE
+#endif
+#if defined(TEST_GUEST_LAYOUT_END)
+#undef GUEST_LAYOUT_END
+#define GUEST_LAYOUT_END TEST_GUEST_LAYOUT_END
 #endif
 #include "runtime/x86.h"
 #include "platform/os.h"
@@ -14,7 +20,8 @@ static_assert(GUEST_HEAP_END < GUEST_STACK_TOP - GUEST_STACK_SIZE);
 static_assert(GUEST_STACK_TOP < GUEST_RETURN_SENTINEL);
 static_assert(GUEST_RETURN_SENTINEL < GUEST_TEB_BASE);
 static_assert(GUEST_TEB_BASE < GUEST_SHIM_BASE);
-static_assert(GUEST_SHIM_END == GUEST_SIZE);
+static_assert(GUEST_SHIM_END == GUEST_LAYOUT_END);
+static_assert(GUEST_LAYOUT_END <= GUEST_SIZE);
 
 static void fault(const char *) {
     os_exit_immediately(201);
@@ -28,6 +35,16 @@ int main(int argc, char **argv) {
     arena[GUEST_SIZE - 1] = 0x34;
     if (arena[0] != 0x12 || arena[GUEST_SIZE - 1] != 0x34)
         return 2;
+    if (GUEST_LAYOUT_END < GUEST_SIZE) {
+        // A high module remains intact while every allocating region is used.
+        arena[GUEST_LAYOUT_END] = 0x56;
+        const uint32_t addresses[] = {GUEST_HEAP_BASE, GUEST_HEAP_END - 1, GUEST_STACK_TOP - 1,
+                                      GUEST_TEB_BASE, GUEST_SHIM_END - 1};
+        for (uint32_t address : addresses)
+            arena[address] = 0x78;
+        if (arena[GUEST_LAYOUT_END] != 0x56)
+            return 8;
+    }
     if (argc == 2) {
         if (!os_install_fault_handlers(fault))
             return 3;
