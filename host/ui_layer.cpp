@@ -263,11 +263,39 @@ void ui_layer_extract(HostFrameHandle f, int guest_w, int guest_h, const UiFrame
     };
     // Union the ORIGINAL rectangles, not growing bounding boxes, which can
     // contain empty space and would merge disconnected text/icon islands.
-    for (size_t i = 0; i < records.size(); ++i) {
-        for (size_t j = 0; j < i; ++j) {
-            if (records[i]->src.surface == records[j]->src.surface &&
-                connected(rect(*records[i]), rect(*records[j])))
-                parent[root(i)] = root(j);
+    //
+    // The pairwise O(n^2) scan this replaces dominated menu frames, where a
+    // single frame carries hundreds of small blits: at 13 fps it was ~30% of
+    // the present thread. Group indices by source surface (the only field the
+    // union keyed on), then sweep each group left to right keeping an active
+    // set of rectangles whose right edge still reaches the current left edge.
+    // Only those can connect in x, so only they are tested. The resulting
+    // components are identical; the cost is near-linear on real UI.
+    std::map<HostSurfaceId, std::vector<size_t>> by_surface;
+    for (size_t i = 0; i < records.size(); ++i)
+        by_surface[records[i]->src.surface].push_back(i);
+    for (auto &entry : by_surface) {
+        auto &idx = entry.second;
+        std::sort(idx.begin(), idx.end(),
+                  [&](size_t a, size_t b) { return rect(*records[a]).x < rect(*records[b]).x; });
+        std::vector<size_t> active;
+        for (size_t p = 0; p < idx.size(); ++p) {
+            const size_t i = idx[p];
+            const Rect ri = rect(*records[i]);
+            size_t kept = 0;
+            for (size_t q = 0; q < active.size(); ++q) {
+                const size_t j = active[q];
+                const Rect rj = rect(*records[j]);
+                // idx is sorted by left edge, so once rj ends before ri starts
+                // it ends before every later rectangle too: drop it for good.
+                if (rj.right < ri.x)
+                    continue;
+                active[kept++] = j;
+                if (connected(ri, rj))
+                    parent[root(i)] = root(j);
+            }
+            active.resize(kept);
+            active.push_back(i);
         }
     }
     std::vector<std::vector<const HostBlitRecord *>> groups;
