@@ -1046,6 +1046,113 @@ class Image(object):
     def is_exec(self, va):
         return any(lo <= va < hi for lo, hi, _ in self.exec_ranges)
 
+    def msvc_func_info(self, stub):
+        """VC8 x86 MOV EAX,FuncInfo / JMP imported __CxxFrameHandler3.
+
+        Prove the handler's identity through the IAT before interpreting any
+        tables; arbitrary MOV immediates are not exception metadata.
+        """
+        cache = self.__dict__.setdefault("_msvc_info", {})
+        if stub in cache:
+            return cache[stub]
+        def handler(va, depth=0):
+            if depth > 2:
+                return False
+            if self.rd8(va) == 0xe9:
+                rel = self.rd32(va + 1)
+                return rel is not None and handler((va + 5 + rel) & 0xffffffff, depth + 1)
+            if self.rd8(va) == 0xff and self.rd8(va + 1) == 0x25:
+                return getattr(self, "iat_names", {}).get(self.rd32(va + 2)) == "__CxxFrameHandler3"
+            return False
+        if self.rd8(stub) != 0xb8 or not handler(stub + 5):
+            cache[stub] = None
+            return None
+        info = self.rd32(stub + 1)
+        fields = [self.rd32(info + i * 4) if info else None for i in range(5)]
+        if (None in fields or not 0x19930520 <= fields[0] & 0x1fffffff <= 0x19930522
+                or fields[1] > 4096 or fields[3] > 4096):
+            raise TranslateError("invalid MSVC FuncInfo at handler %08x" % stub)
+        _, states, unwind, count, tries = fields
+        funclets, ranges = set(), {(info, info + 36)}
+        if states:
+            ranges.add((unwind, unwind + states * 8))
+        for i in range(states):
+            target = self.rd32(unwind + i * 8 + 4)
+            if target is None or (target and not self.is_exec(target)):
+                raise TranslateError("invalid MSVC unwind map at %08x" % info)
+            if target:
+                funclets.add(target)
+        if count:
+            ranges.add((tries, tries + count * 20))
+        catch_funclets = set()
+        for i in range(count):
+            entry = [self.rd32(tries + i * 20 + j * 4) for j in range(5)]
+            if (None in entry or entry[0] > entry[1] or entry[1] >= states
+                    or not 1 <= entry[3] <= 256):
+                raise TranslateError("invalid MSVC try map at %08x" % info)
+            ranges.add((entry[4], entry[4] + entry[3] * 16))
+            for j in range(entry[3]):
+                target = self.rd32(entry[4] + j * 16 + 12)
+                if target is None or not self.is_exec(target):
+                    raise TranslateError("invalid MSVC catch handler at %08x" % info)
+                catch_funclets.add(target)
+        funclets.update(catch_funclets)
+        landings = set()
+        for target in catch_funclets:
+            # A catch funclet returns a continuation in EAX. Recover both arms
+            # of its CFG; the continuation need not fit the parent's listing.
+            instructions = {ins.addr: ins for ins in self.recover(target, set(), limit=4096)}
+            import capstone
+            decoder = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+            decoder.detail = True
+            writes_eax, ends = set(), {}
+            for va, ins in instructions.items():
+                decoded = next(decoder.disasm(self.data[va-self.base:va-self.base+15], va, count=1), None)
+                if decoded is None:
+                    writes_eax.add(va)
+                    continue
+                ends[va] = va + decoded.size
+                _, written = decoded.regs_access()
+                if any(decoded.reg_name(reg) in ("eax", "ax", "al", "ah") for reg in written):
+                    writes_eax.add(va)
+            incoming, pending = {target: {None}}, [target]
+            while pending:
+                va = pending.pop()
+                ins = instructions.get(va)
+                if ins is None:
+                    continue
+                values = set(incoming[va])
+                if ins.mnem == "RET":
+                    landings.update(value for value in values if value is not None)
+                    continue
+                if ins.mnem == "CALL" or va in writes_eax:
+                    values = {None}
+                    if ins.mnem in ("MOV", "LEA") and len(ins.ops) == 2:
+                        dst, src = (parse_operand(op) for op in ins.ops)
+                        address = src.imm if src.kind == "imm" else (
+                            src.disp if src.kind == "mem" and src.base is None and src.index is None else None)
+                        if dst.size == 32 and address is not None and self.is_exec(address):
+                            values = {address}
+                        elif src.kind == "reg" and src.reg == R_EAX and src.size == 32:
+                            values = set(incoming[va])
+                successors = []
+                if (ins.mnem == "JMP" or ins.mnem in JCC or ins.mnem.startswith("LOOP")
+                        or ins.mnem in ("JECXZ", "JCXZ")):
+                    successors.append(Translator.branch_target(ins))
+                if ins.mnem != "JMP":
+                    successors.append(ends.get(va))
+                for successor in successors:
+                    if successor not in instructions:
+                        continue
+                    known = incoming.setdefault(successor, set())
+                    if not values <= known:
+                        known.update(values)
+                        pending.append(successor)
+        result = {"address": info, "tries": count, "funclets": funclets,
+                  "landings": landings, "ranges": ranges}
+        cache[stub] = result
+        return result
+
     def seh_landings(self, stub):
         """Classify a Delphi handler stub by structure, never by its target's name.
 
@@ -1089,6 +1196,9 @@ class Image(object):
         landing block to discover behind one, so discovery skips it; the
         frame itself is still modelled, because seh_frame_sites keeps it.
         """
+        msvc = self.msvc_func_info(stub)
+        if msvc is not None:
+            return sorted(msvc["funclets"] | msvc["landings"]), None
         try:
             return self.seh_landings(stub)
         except TranslateError:
@@ -1802,11 +1912,81 @@ def seh_frame_sites(fn, image=None):
                     break
         except TranslateError:
             continue
+    # VC8 publishes a registration through LEA reg,[EBP-12], or directly
+    # through ESP before allocating locals. Prove the fixed prologue layout:
+    # state at EBP-4, handler at EBP-8 and previous chain at EBP-12.
+    classifier = getattr(image, "msvc_func_info", None)
+    if classifier is not None:
+        for i, ins in enumerate(fn.insns):
+            if ins.mnem != "MOV" or len(ins.ops) != 2:
+                continue
+            dst, src = (parse_operand(op) for op in ins.ops)
+            if (not seh_chain_operand(dst, dst.base) or not seh_zero_base(fn, i, dst.base)
+                    or src.kind != "reg" or src.size != 32):
+                continue
+            lea, address = i, Op("mem", base=R_ESP, disp=0)
+            if src.reg != R_ESP:
+                lea = None
+                for j in range(i - 1, max(-1, i - 32), -1):
+                    prev = fn.insns[j]
+                    if (not fn.contiguous[j] or prev.mnem in TERMINATORS
+                            or prev.mnem in JCC or prev.mnem == "CALL"):
+                        break
+                    if not Translator.writes_reg32(prev, src.reg):
+                        continue
+                    if prev.mnem == "LEA" and len(prev.ops) == 2:
+                        candidate = parse_operand(prev.ops[1])
+                        if (candidate.kind == "mem" and candidate.base in (R_EBP, R_ESP)
+                                and candidate.index is None):
+                            lea, address = j, candidate
+                    break
+            if lea is None:
+                continue
+            anchor = None
+            for j in range(lea - 1, max(-1, lea - 64), -1):
+                prev = fn.insns[j]
+                if (not fn.contiguous[j] or prev.mnem in TERMINATORS
+                        or prev.mnem in JCC or prev.mnem == "CALL"):
+                    break
+                if prev.mnem == "MOV" and prev.ops == ["EBP", "ESP"]:
+                    anchor = j
+                    break
+                if Translator.writes_reg32(prev, R_EBP):
+                    break
+            if anchor is None:
+                continue
+            delta, handler, record = 0, None, False
+            for j in range(anchor + 1, i + 1):
+                prev = fn.insns[j]
+                if j == lea:
+                    record = (address.disp == -12 if address.base == R_EBP else
+                              delta is not None and delta + address.disp == -12)
+                if prev.mnem == "PUSH":
+                    value = parse_operand(prev.ops[0])
+                    if delta == -4 and value.kind == "imm" and j > 0:
+                        before = fn.insns[j - 1]
+                        state = parse_operand(before.ops[0]) if before.mnem == "PUSH" else None
+                        if (state is not None and state.kind == "imm"
+                                and state.imm & 0xffffffff == 0xffffffff
+                                and classifier(value.imm) is not None):
+                            handler = value.imm
+                    delta = delta - 4 if delta is not None else None
+                elif prev.mnem == "POP":
+                    delta = delta + 4 if delta is not None else None
+                elif prev.mnem in ("ADD", "SUB") and len(prev.ops) == 2:
+                    dest, amount = (parse_operand(op) for op in prev.ops)
+                    if dest.kind == "reg" and dest.reg == R_ESP:
+                        delta = (delta + (amount.imm if prev.mnem == "ADD" else -amount.imm)
+                                 if delta is not None and amount.kind == "imm" else None)
+                elif Translator.writes_reg32(prev, R_ESP):
+                    delta = None
+            if record and handler is not None:
+                sites[i] = handler
     return sites
 
 
 NORETURN_IMPORTS = frozenset(("RaiseException", "ExitProcess", "TerminateProcess",
-                              "ExitThread", "FatalAppExitA", "FatalExit"))
+                              "ExitThread", "FatalAppExitA", "FatalExit", "_CxxThrowException"))
 
 
 def noreturn_import(ins, iat_names):
@@ -1820,7 +2000,7 @@ def noreturn_import(ins, iat_names):
     # RaiseException can resume after a continuable exception; terminating
     # another process can return too. Only unconditional local exits end a
     # raw import call without further argument/control-flow evidence.
-    exits = {"ExitProcess", "ExitThread", "FatalAppExitA", "FatalExit"}
+    exits = {"ExitProcess", "ExitThread", "FatalAppExitA", "FatalExit", "_CxxThrowException"}
     return (op.kind == "mem" and op.base is None and op.index is None
             and iat_names.get(op.disp) in exits)
 
@@ -2839,10 +3019,29 @@ class Translator(object):
             self.strict = strict
             fn.pushed_continuations = set()
             fn.seh_sites = fn.seh_restores = {}
+            fn.msvc_sites = fn.msvc_restores = {}
+            fn.msvc_landings = set()
             return
         fn.pushed_continuations = self.live_continuations(fn)
         fn.seh_sites = seh_frame_sites(fn, self.image)
         fn.seh_restores = seh_restore_sites(fn)
+        fn.msvc_sites, fn.msvc_landings = {}, set()
+        recognized = False
+        classifier = getattr(self.image, "msvc_func_info", None)
+        for i, stub in list(fn.seh_sites.items()):
+            info = classifier(stub) if classifier else None
+            if info is None:
+                continue
+            recognized = True
+            del fn.seh_sites[i]
+            if info["tries"]:
+                fn.msvc_sites[i] = (stub, info["address"])
+                fn.msvc_landings.update(info["landings"])
+        fn.msvc_restores = seh_restore_sites(fn) if fn.msvc_sites else set()
+        if fn.msvc_sites and RESUMABLE_STACKS:
+            raise TranslateError("MSVC C++ checkpoints require preserved native call frames")
+        if recognized and not fn.seh_sites:
+            fn.seh_restores = set()
         self.strict = strict
         for i, ins in enumerate(fn.insns):
             if ins.mnem == "JMP" and ins.ops and not ins.ops[0].startswith("0x"):
@@ -2867,7 +3066,7 @@ class Translator(object):
             self.stats["_intrinsic_body"] += 1
             return ["/* runtime intrinsic */",
                     "void fn_%08x(X86 *c) { %s }" % (fn.addr, INTRINSIC_BODY[fn.addr])]
-        entries = sorted(set(entries))
+        entries = sorted(set(entries) | (fn.msvc_landings & fn.addrs))
         # An alternate entry must be an instruction in THIS body.  A block can
         # be re-recovered between the discovery rounds and the final pass -
         # recursive descent makes them grow - so an entry registered against
@@ -2890,6 +3089,7 @@ class Translator(object):
         self.dead_after_noreturn_addrs.update(fn.dead_addrs)
 
         labels = set(fn.pushed_continuations)
+        labels.update(fn.msvc_landings & fn.addrs)
         # RTL fill/move routines compute addresses within unrolled code rather
         # than loading a table. Only bodies with such jumps need every label.
         if any(ins.mnem == "JMP" and self.branch_target(ins) is None
@@ -3123,6 +3323,15 @@ class Translator(object):
                 # These come from data Ghidra decoded as code.
                 return ["recomp_int(c, 6u);"] if dst.imm == SEGMENT_SELECTOR["CS"] else [";"]
             L.append(write_op(dst, size, read_op(src, size)))
+            if i in fn.msvc_sites:
+                stub, info = fn.msvc_sites[i]
+                L.append("{ jmp_buf *b_ = recomp_msvc_frame_enter(c, %s, %s);" % (hexlit(stub), hexlit(info)))
+                L.append("if (setjmp(*b_)) { uint32_t target_ = recomp_msvc_frame_land(c); switch (target_) {")
+                for target in sorted(fn.msvc_landings & fn.addrs):
+                    L.append("case %s: %s" % (hexlit(target), self.goto_label(target)))
+                L.append("default: recomp_jump(c, target_); return; } } }")
+            elif i in fn.msvc_restores:
+                L.append("recomp_msvc_frame_leave(c);")
             if (fn.seh_sites and (seh_chain_operand(dst) or i in fn.seh_sites)
                     and src.kind == "reg" and src.size == 32):
                 L.append("c->eip = %s;" % hexlit(ins.addr))
@@ -3230,6 +3439,8 @@ class Translator(object):
             L.append(write_op(ops[0], 32, "v_"))
             if i in fn.seh_restores:
                 L.append("c->eip = %s; recomp_seh_frame_leave(c);" % hexlit(ins.addr))
+            if i in fn.msvc_restores:
+                L.append("recomp_msvc_frame_leave(c);")
             return L
 
         if m == "PUSHAD":
@@ -3464,7 +3675,7 @@ class Translator(object):
                     # one; inside another call's argument list it is undefined.
                     L.append("jmp_buf *b_ = recomp_setjmp_prepare(c);")
                     L.append("if (setjmp(*b_) == 0) recomp_setjmp_return(c, 0);")
-                    L.append("else recomp_setjmp_return(c, 1);")
+                    L.append("else recomp_setjmp_return(c, (int32_t)c->r[R_EAX]);")
                 elif t in self.func_addrs:
                     L.append("CALL_FN(%08x);" % t)
                 else:
@@ -5353,6 +5564,9 @@ def main():
                 if stub in seh_stubs:
                     continue
                 seh_stubs.add(stub)
+                msvc = image.msvc_func_info(stub)
+                if msvc is not None:
+                    tr.table_ranges.update(msvc["ranges"])
                 # The handler is a function whatever its shape: MSVC's is an
                 # ordinary routine the prologue pushes. Adopt it first, then
                 # look for a Delphi landing block behind it.
@@ -6159,7 +6373,7 @@ def main():
     with open(os.path.join(args.out, "funcs.h"), "w") as fh:
         fh.write("/* generated by tools/recomp/translate.py -- do not edit */\n")
         fh.write("#ifndef RECOMP_FUNCS_H\n#define RECOMP_FUNCS_H\n")
-        fh.write('#include "x86.h"\n#include "intrinsics.h"\n#include "seh.h"\n')
+        fh.write('#include "x86.h"\n#include "intrinsics.h"\n#include "seh.h"\n#include "msvc_eh.h"\n')
         fh.write("/* Task 8 replacements: define FN_<addr> to a native function in a\n"
                  " * header named by RECOMP_OVERRIDE_HEADER and every direct call site,\n"
                  " * tail call and jump-table case for that address is redirected. */\n")

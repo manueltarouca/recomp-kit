@@ -1,4 +1,5 @@
 #include "imports.h"
+#include "msvc_eh.h"
 #include "gdi32_internal.h"
 #include "user32_internal.h"
 #include "kernel32_internal.h"
@@ -61,6 +62,9 @@ std::set<std::string> &registered_dlls() {
 struct DataImport {
     uint32_t size = 0;
     uint32_t addr = 0;
+    uint32_t storage = 0, prefix = 0;
+    uint64_t generation = 0;
+    void (*init)(uint32_t) = nullptr;
     std::string desc;
 };
 std::map<std::string, DataImport> &data_imports() {
@@ -181,6 +185,13 @@ void imports_register_data(const char *dll, const char *name, uint32_t size) {
     if (d.desc.empty())
         d.desc = std::string(dll) + "!" + name;
 }
+void imports_register_data_init(const char *dll, const char *name, uint32_t size,
+                                void (*init)(uint32_t), uint32_t prefix) {
+    imports_register_data(dll, name, size);
+    DataImport &data = data_imports()[key_of(dll, name)];
+    data.init = init;
+    data.prefix = prefix;
+}
 
 static void register_default_data_imports() {
     static bool done = false;
@@ -200,19 +211,26 @@ uint32_t imports_alloc_data(const char *dll, const char *name) {
         return 0;
     DataImport &d = it->second;
     // mem_init() invalidates the heap, so a stale address is re-allocated.
-    if (!d.addr || !heap_owns(d.addr)) {
-        d.addr = heap_alloc(d.size, true);
+    if (!d.addr || d.generation != mem_generation() || !heap_owns(d.storage)) {
+        d.storage = d.size <= UINT32_MAX - d.prefix ? heap_alloc(d.size + d.prefix, true) : 0;
+        d.addr = d.storage ? d.storage + d.prefix : 0;
+        d.generation = mem_generation();
         if (!d.addr)
             LOGW("imports: cannot allocate %u bytes for data import %s", d.size, d.desc.c_str());
-        else
+        else {
             LOGV("data import %s -> %u zeroed bytes at %08x", d.desc.c_str(), d.size, d.addr);
+            if (d.init)
+                d.init(d.addr);
+        }
     }
     return d.addr;
 }
 
 uint32_t imports_data_address(const char *dll, const char *name) {
     auto it = data_imports().find(key_of(dll, name));
-    return it == data_imports().end() ? 0 : it->second.addr;
+    return it == data_imports().end() || it->second.generation != mem_generation()
+               ? 0
+               : it->second.addr;
 }
 
 uint32_t imports_data_count() {
@@ -527,6 +545,9 @@ uint32_t recomp_callback_depth(void) {
 
 void recomp_callback_truncate(uint32_t depth) {
     while (callbacks.stack.size() > depth) {
+        // Delphi and C++ landings both abandon native callback records.
+        // Dispatcher authorization must die with the record it described.
+        recomp_msvc_callback_leave(callbacks.stack.back()->cpu, uint32_t(callbacks.stack.size()));
         delete callbacks.stack.back();
         callbacks.stack.pop_back();
     }
@@ -594,6 +615,8 @@ void imports_init() {
     kernel32_wide_register();
     oleaut32_register();
     misc_dlls_register();
+    extern void msvc_eh_register();
+    msvc_eh_register();
     comctl32_register();
     media_foundation_register();
     imports_register(g_user32_shims, g_user32_shim_count);

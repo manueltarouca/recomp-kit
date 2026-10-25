@@ -69,6 +69,7 @@ def test_callsite_saves_setjmp_in_the_callers_host_frame():
     tr.prepare(fn)
     body = "\n".join(tr.translate(fn))
     assert "if (setjmp(*b_) == 0)" in body
+    assert "else recomp_setjmp_return(c, (int32_t)c->r[R_EAX]);" in body
     assert "recomp_setjmp_prepare(c)" in body
     assert "CALL_FN(00401100)" not in body
 

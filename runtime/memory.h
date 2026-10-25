@@ -7,6 +7,7 @@
 // state. Native platforms reserve the entire 32-bit range plus a 64 KB upper
 // guard; only GUEST_SIZE bytes are accessible. Aborts on failure.
 void mem_init();
+uint64_t mem_generation(); // Changes whenever mem_init replaces the arena.
 void mem_shutdown();
 
 // First-fit free-list allocator over HEAP_BASE..HEAP_LIMIT.

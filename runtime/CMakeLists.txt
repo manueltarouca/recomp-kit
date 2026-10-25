@@ -1,7 +1,7 @@
 # The guest runtime. Object libraries, so every source is linked into every
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
-  memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
+  memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp msvc_eh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
   resources.cpp oleaut32.cpp mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp
   misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp)
@@ -88,6 +88,18 @@ pop_test_binary(scheduler_tests)
 add_test(NAME scheduler_tests COMMAND scheduler_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(scheduler_tests PROPERTIES LABELS nogame TIMEOUT 30)
 add_executable(vector_tests tests/vector_tests.cpp tests/stub_recomp_call.cpp)
+set(POP_MSVC_EH_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/generated/msvc_eh_fixture.c)
+add_custom_command(OUTPUT ${POP_MSVC_EH_FIXTURE}
+  COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/runtime/tests/make_msvc_eh_fixture.py ${POP_MSVC_EH_FIXTURE}
+  DEPENDS ${POP_ROOT}/runtime/tests/make_msvc_eh_fixture.py ${POP_ROOT}/tools/recomp/translate.py
+  VERBATIM)
+add_executable(msvc_eh_tests tests/msvc_eh_tests.cpp ${POP_MSVC_EH_FIXTURE})
+target_link_libraries(msvc_eh_tests PRIVATE recomp_platform recomp_runtime_testing)
+target_compile_options(msvc_eh_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(msvc_eh_tests 1)
+pop_test_binary(msvc_eh_tests)
+add_test(NAME msvc_eh_tests COMMAND msvc_eh_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(msvc_eh_tests PROPERTIES LABELS nogame TIMEOUT 30)
 target_link_libraries(vector_tests PRIVATE recomp_platform recomp_runtime_testing)
 target_compile_options(vector_tests PRIVATE ${POP_WARN_WERROR})
 pop_optimize(vector_tests 1)

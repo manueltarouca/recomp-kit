@@ -340,6 +340,10 @@ void heap_reset() {
 
 } // namespace
 
+static uint64_t arena_generation = 0;
+uint64_t mem_generation() {
+    return arena_generation;
+}
 void mem_init() {
     recomp_seh_reset(nullptr);
     if (g_mem) {
@@ -353,6 +357,7 @@ void mem_init() {
     }
     g_mem = (uint8_t *)p;
     heap_reset();
+    ++arena_generation;
 }
 
 void mem_shutdown() {

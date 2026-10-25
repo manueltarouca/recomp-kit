@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Handle VC8 C++ throws, typed/reference/value catches, catch copies, nested
+  cleanups, rethrows and continuation transfer with live translated checkpoints.
+  Model the VC8 std::exception layout and RTTI, type_info destruction and
+  uncaught_exception. Retire checkpoints on longjmp and thread teardown;
+  preserve full longjmp results. Reject stale checkpoints, foreign native
+  callback unwinds and unsupported matching tries inside catch bodies by name.
+  Fixes #24.
+
 - Warm accepted D3D9 shaders and saved pipeline descriptions on two Metal
   workers, with one build shared by workers and first-use draws. Keep validated
   session hints in the profile through atomic whole-file replacement, recover

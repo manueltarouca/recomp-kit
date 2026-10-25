@@ -89,6 +89,9 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
 // guest memory the first time, and 0 when dll!name is not a known data import.
 // ---------------------------------------------------------------------------
 void imports_register_data(const char *dll, const char *name, uint32_t size);
+// Initialize once per arena allocation. A prefix supports RTTI vtable[-1].
+void imports_register_data_init(const char *dll, const char *name, uint32_t size,
+                                void (*init)(uint32_t), uint32_t prefix = 0);
 uint32_t imports_alloc_data(const char *dll, const char *name);
 uint32_t imports_data_address(const char *dll, const char *name);
 uint32_t imports_data_count();
