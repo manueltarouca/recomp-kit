@@ -1,5 +1,10 @@
 # Testing
 
+`runtime_tests --mm-timers-only` runs without a game image and is registered
+as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
+event timers without a message loop, callback cancellation/replacement,
+worker exit/restart, periodic cadence, pinned time and shutdown.
+
 Run checks appropriate to your change. Every suite's output belongs under ignored
 `build/`; requested tests must report failure rather than silently skip prerequisites.
 

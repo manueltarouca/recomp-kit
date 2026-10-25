@@ -208,6 +208,22 @@ class LoadTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 game_config.load(game)   # a module needs an arena that reaches it: checked at load
 
+    def test_mm_timer_mode(self):
+        cfg = game_config.load(ROOT / "games/stub")
+        self.assertEqual(cfg["system"]["mm_timers"], "message_loop")
+        self.assertIn("#define RECOMP_MM_TIMER_THREAD 0", gen_game_config.render_header(cfg))
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            base = (ROOT / "games/stub/game.toml").read_text()
+            (game / "globals.toml").write_text((ROOT / "games/stub/globals.toml").read_text())
+            (game / "game.toml").write_text(base + '\n[system]\nmm_timers = "thread"\n')
+            cfg = game_config.load(game)
+            self.assertIn("#define RECOMP_MM_TIMER_THREAD 1", gen_game_config.render_header(cfg))
+            for invalid in ('"native"', 'true', '1'):
+                (game / "game.toml").write_text(base + '\n[system]\nmm_timers = ' + invalid + '\n')
+                with self.assertRaises(ValueError):
+                    game_config.load(game)
+
     def test_controls_section(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

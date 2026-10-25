@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add `[system] mm_timers = "thread"` for multimedia callbacks on a runtime
+  cooperative guest worker, including event timers. Games can wait for a timer
+  before entering their message loop. The default remains `"message_loop"`.
+  Thread mode preserves periodic cadence, honors pinned time and stops before
+  host shutdown. Fixes #16.
+
 - Cut host work in guest polling loops. PeekMessage pumps audio and window
   presents at most once per `RECOMP_PEEK_PUMP_US` (default 1000), a
   GetTickCount spin that sees no time pass sleeps 1 ms cooperatively, and the

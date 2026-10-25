@@ -152,6 +152,9 @@ def load(game_dir):
         raise ValueError("%s: missing [game] keys: %s" % (source, ", ".join(missing)))
     game["heap_base"] = validate_heap_base(int(game.get("heap_base", HEAP_BASE_DEFAULT)))
     windows_version(game.setdefault("windows_version", "4.10"))
+    system = cfg.setdefault("system", {})
+    if system.setdefault("mm_timers", "message_loop") not in ("message_loop", "thread"):
+        raise ValueError('%s: [system] mm_timers must be "message_loop" or "thread"' % source)
     translate = cfg.setdefault("translate", {})
     resumable = translate.setdefault("resumable_stacks", False)
     if not isinstance(resumable, bool):

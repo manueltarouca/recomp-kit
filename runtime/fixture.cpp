@@ -170,6 +170,7 @@ void fixture_mods_teardown() {
     // Ask first: that revokes every mod at once, so nothing a surviving worker
     // does can reach a plugin, whether or not the teardown can run yet.
     mods_shutdown_request();
+    host_stop_mm_timer_thread();
     // The abandoned frames go FIRST, and unconditionally: this thread has left
     // guest code, so any mod invocation still recorded for it was abandoned by
     // a longjmp - a guest ExitProcess inside a hooked call is the case that
