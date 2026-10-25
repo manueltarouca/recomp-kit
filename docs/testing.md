@@ -14,6 +14,9 @@ backend (Metal on Apple platforms, Vulkan on Windows/Linux). These are
 offscreen correctness checks; they do not establish game compatibility or
 playable performance.
 
+The `gpu` label includes `d3d9_gpu_tests` (`host_tests --d3d9-gpu`), so the
+Direct3D 8 combiner cases also run in the Metal and Vulkan CI jobs.
+
 Run checks appropriate to your change. Every suite's output belongs under ignored
 `build/`; requested tests must report failure rather than silently skip prerequisites.
 
