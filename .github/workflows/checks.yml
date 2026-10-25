@@ -158,13 +158,13 @@ jobs:
           fi
       - name: Configure
         if: runner.os != 'Windows'
-        run: cmake --preset ${{ matrix.preset }}
+        run: python -c "from tools import build; build.configure('${{ matrix.preset }}')"
       - name: MSYS2's make for the FFmpeg build (Windows)
         if: runner.os == 'Windows'
         run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed make diffutils
       - name: Configure with video (Windows)
         if: runner.os == 'Windows'
-        run: cmake --preset ${{ matrix.preset }} -DRECOMP_FFMPEG_MAKE=C:/msys64/usr/bin/make.exe
+        run: python -c "from tools import build; build.configure('${{ matrix.preset }}', ['-DRECOMP_FFMPEG_MAKE=C:/msys64/usr/bin/make.exe'])"
       - name: Build every test binary this platform has
         if: matrix.preset != 'ios-stub'
         run: cmake --build --preset ${{ matrix.preset }} --target check_binaries

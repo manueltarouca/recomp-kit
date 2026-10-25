@@ -30,8 +30,10 @@ packager (`--target ios`, including `--stub`) requires macOS.
 
 The lock covers all tooling dependencies and platform wheels. Maintain inputs
 in `requirements-dev.txt` and regenerate hashes with `pip-tools` 7.5.2 using
-the command in the lock header. CI jobs needing only CMake/Ninja use
-`tools/requirements-build.lock`. SDL3/glslang archives are pinned to commits
+the command in the lock header. Native CI jobs use `tools/requirements-build.lock`
+for CMake, Ninja and the decoder used by generated integration fixtures. They
+configure through `tools/build.py` so generation uses that same interpreter.
+SDL3/glslang archives are pinned to commits
 and SHA-256 digests in `cmake/Dependencies.cmake`.
 
 ## Prepare a game installation
