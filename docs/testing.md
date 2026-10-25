@@ -5,6 +5,14 @@ as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
 event timers without a message loop, callback cancellation/replacement,
 worker exit/restart, periodic cadence, pinned time and shutdown.
 
+`vector_tests` pins MXCSR rounding, conversion exception status and integer
+indefinite values (including FISTTP) against architectural constants. The
+synthetic instruction differential suite also covers packed/scalar SSE1,
+MMX conversions and x87 conditional moves/tags on POSIX hosts with Unicorn.
+Unicorn omits SSE conversion status flags, so those bits are checked in
+the native suite separately. RCP/RSQRT use exact reciprocals; differential
+inputs for these are exact powers rather than hardware-estimate bit patterns.
+
 `loader_module_tests` maps hash-verified synthetic DLL files, checks relocated
 memory and IAT binding with the importer mapped first, then exercises dependency
 attach/detach order, reload, cycles, failed initialization and static pinning.

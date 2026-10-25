@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Model packed SSE1 arithmetic, reciprocal/square-root, comparisons, lane
+  moves and MMX conversions used without a CPUID check. Correct scalar
+  min/max and float-to-int results, preserve MXCSR rounding control, and
+  implement x87 FISTTP, conditional moves and free-register tags. Unlisted
+  SSE memory operands and FPU environments now recover correctly. Fixes #26.
+
 - Relocate auxiliary PE32 DLLs to configured load bases with validated
   HIGHLOW relocations in both translator and loader. Map every module before
   binding imports, attach imported DLLs before their dependents, retain their

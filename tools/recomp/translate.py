@@ -663,6 +663,13 @@ class Insn(object):
 
     def __init__(self, addr, mnem, rep, opstrs, raw):
         self.addr = addr
+        mnem = {"SAL":"SHL", "FCOMPI":"FCOMIP", "FUCOMPI":"FUCOMIP"}.get(mnem, mnem)
+        # Capstone prints the predicate in the SSE compare mnemonic; exported
+        # listings can spell the generic immediate form instead. Normalize both.
+        match = re.fullmatch(r"CMP(EQ|LT|LE|UNORD|NEQ|NLT|NLE|ORD)(PS|SS|PD|SD)", mnem)
+        if match:
+            predicate = ("EQ", "LT", "LE", "UNORD", "NEQ", "NLT", "NLE", "ORD").index(match[1])
+            mnem, opstrs = "CMP" + match[2], list(opstrs) + [str(predicate)]
         self.mnem = mnem
         self.rep = rep
         self.ops = opstrs
@@ -736,6 +743,9 @@ JCC["JECXZ"] = ("c->r[1] == 0", ())
 JCC["LOOP"] = ("(c->r[1] = c->r[1] - 1u) != 0u", ())
 SETCC = {"SET" + k: v for k, v in COND.items()}
 CMOVCC = {"CMOV" + k: v for k, v in COND.items()}
+FCMOVCC = {"FCMOV" + k: COND[v] for k,v in
+           (("B","B"),("E","Z"),("BE","BE"),("U","P"),
+            ("NB","NC"),("NE","NZ"),("NBE","A"),("NU","NP"))}
 
 ARITH_ALL = ALL_FLAGS
 LOGIC_DEF = ALL_FLAGS           # AF is architecturally undefined; treat as killed
@@ -828,6 +838,12 @@ def flag_effect(insn):
         return (NO_FLAGS, frozenset(SETCC[m][1]))
     if m in CMOVCC:
         return (NO_FLAGS, frozenset(CMOVCC[m][1]))
+    if m in FCMOVCC:
+        return (NO_FLAGS, frozenset(FCMOVCC[m][1]))
+    if m in ("FCOMI", "FCOMIP", "FUCOMI", "FUCOMIP", "COMISS", "UCOMISS", "COMISD", "UCOMISD"):
+        return (ALL_FLAGS, NO_FLAGS)
+    if m == "CMPSD" and names_an_xmm(insn):
+        return (NO_FLAGS, NO_FLAGS)
     if insn.rep and m in ("SCASB", "SCASW", "SCASD", "CMPSB", "CMPSW", "CMPSD"):
         return (NO_FLAGS, NO_FLAGS)
     if m in SHIFT_MAYDEF:
@@ -1441,7 +1457,7 @@ class Image(object):
     #: x87 mnemonics whose memory operand is an integer or a control/status
     #: word rather than a float, so its width names itself (`word ptr`) instead
     #: of being spelled `float`/`double`/`extended double`.
-    X87_INT = frozenset(("FILD", "FIST", "FISTP", "FIADD", "FISUB", "FISUBR",
+    X87_INT = frozenset(("FILD", "FIST", "FISTP", "FISTTP", "FIADD", "FISUB", "FISUBR",
                          "FIMUL", "FIDIV", "FIDIVR", "FICOM", "FICOMP",
                          "FNSTSW", "FSTSW", "FNSTCW", "FSTCW", "FLDCW",
                          "FNSTENV", "FLDENV", "FNSAVE", "FSAVE", "FRSTOR"))
@@ -1454,10 +1470,12 @@ class Image(object):
                   "IRETD": "IRET"}
 
     def _size_word(self, nbytes, mnem):
+        if mnem in ("FNSTENV", "FSTENV", "FLDENV", "FSAVE", "FNSAVE", "FRSTOR") and nbytes in (28, 108):
+            return "dword"
         if mnem.startswith("F") and mnem not in self.X87_INT:
             return {4: "float", 8: "double", 10: "extended double"}.get(nbytes)
         return {1: "byte", 2: "word", 4: "dword", 8: "qword",
-                10: "extended double"}.get(nbytes)
+                10: "extended double", 16: "xmmword"}.get(nbytes)
 
     def _op_text(self, ci, op, mnem):
         import capstone.x86_const as X
@@ -1495,7 +1513,7 @@ class Image(object):
         mnem = words[-1].upper()
         mnem = self.MNEM_ALIAS.get(mnem, mnem)
         ops = [self._op_text(ci, o, mnem) for o in ci.operands]
-        if rep or mnem in Translator.STRING_MNEM:
+        if rep or (mnem in Translator.STRING_MNEM and not any(XMM_RE.match(o) for o in ops)):
             ops = []            # implicit ES:EDI / ESI operands carry nothing
         text = "%08x  %s%s%s" % (ci.address, mnem, "." + rep if rep else "",
                                  (" " + ",".join(ops)) if ops else "")
@@ -3163,12 +3181,11 @@ class Translator(object):
         if m == "CWDE":
             return ["c->r[0] = (uint32_t)(int32_t)(int16_t)c->r[0];"]
         if m in ("LDMXCSR", "STMXCSR"):
-            # The SSE control word. This kit models one rounding mode and
-            # masks every exception, which is what a guest sets it to; a store
-            # hands back exactly that.
+            # Keep guest rounding control per CPU, independently of the host
+            # floating-point environment and the x87 control word.
             if m == "STMXCSR":
-                return [write_op(ops[0], 32, "0x1f80u")]
-            return [";"]
+                return [write_op(ops[0], 32, "sse_mxcsr(c)")]
+            return ["c->mxcsr_xor = %s ^ 0x1f80u;" % read_op(ops[0], 32)]
 
         # ------------------------------------------------------- arith ----
         if m in ("ADD", "ADC", "SUB", "SBB", "CMP"):
@@ -3411,6 +3428,9 @@ class Translator(object):
         # set, and stay traps nobody reaches.
         # MMX first: is_mmx_insn only matches an MMn operand with no XMM one,
         # so the SSE2 path below still takes every xmm form of MOVQ/MOVD.
+        sse = self.emit_sse_float(ins, m, ops)
+        if sse is not None:
+            return sse
         if is_mmx_insn(m, ins.ops):
             return self.emit_mmx(ins, m)
         # Lane-wise integer, logical and unpack forms. Every one of them has
@@ -3496,7 +3516,7 @@ class Translator(object):
         SSE_SCALAR_FORMS = ("MOVSD", "MOVSS", "SQRTSD", "SQRTSS", "MINSD", "MAXSD",
                             "MINSS", "MAXSS", "CVTSI2SD", "CVTSI2SS", "CVTTSD2SI",
                             "CVTTSS2SI", "CVTSD2SS", "CVTSS2SD", "COMISD", "UCOMISD",
-                            "COMISS", "UCOMISS")
+                            "COMISS", "UCOMISS", "CVTSS2SI", "CVTSD2SI")
         # Only MOVSD and MOVSS are shared with another instruction; the rest
         # of these mnemonics are SSE whatever their operands are, and a
         # conversion's source or destination is often memory or a register.
@@ -3506,7 +3526,7 @@ class Translator(object):
             dst, src = ops[0], ops[1]
             # Which host type this form works in. The conversions name both,
             # so they spell their own operands out instead.
-            single = m.endswith("SS") and m not in ("CVTSD2SS",)
+            single = (m.endswith("SS") and m != "CVTSD2SS") or m in ("CVTSS2SI", "CVTTSS2SI")
 
             def scalar(op, as_single):
                 if op.kind == "xmm":
@@ -3534,14 +3554,14 @@ class Translator(object):
                 keep = "<" if m in ("MINSD", "MINSS") else ">"
                 L.append("{ %s a_ = %s, b_ = %s; %s }"
                          % (t, scalar(dst, single), scalar(src, single),
-                            store_scalar(dst, "b_ %s a_ ? a_ : b_" % keep, single)))
+                            store_scalar(dst, "a_ %s b_ ? a_ : b_" % keep, single)))
             elif m in ("COMISD", "UCOMISD", "COMISS", "UCOMISS"):
                 L.append("recomp_comis(c, %s, %s);" % (scalar(dst, single), scalar(src, single)))
             elif m in ("CVTSI2SD", "CVTSI2SS"):
                 L.append(store_scalar(dst, "(%s)(int32_t)%s" % ("float" if single else "double",
                                                                 read_op(src, 32)), single))
-            elif m in ("CVTTSD2SI", "CVTTSS2SI"):
-                L.append(write_op(dst, 32, "(uint32_t)(int32_t)%s" % scalar(src, single)))
+            elif m in ("CVTTSD2SI", "CVTTSS2SI", "CVTSD2SI", "CVTSS2SI"):
+                L.append(write_op(dst, 32, "sse_i32(c, %s, %d)" % (scalar(src, single), m.startswith("CVTT"))))
             elif m == "CVTSD2SS":
                 L.append(store_scalar(dst, "(float)%s" % scalar(src, False), True))
             elif m == "CVTSS2SD":
@@ -3839,6 +3859,68 @@ class Translator(object):
             return ["c->mm[%d] = %s(c->mm[%d], %s, %du);" % (dst.reg, fn, dst.reg, src(ops[1]), bits)]
         return ["c->mm[%d] = %s(c->mm[%d], %s);" % (dst.reg, fn, dst.reg, src(ops[1]))]
 
+    def emit_sse_float(self, ins, m, ops):
+        """SSE1 lane arithmetic and compares. Snapshot inputs before writing a
+        destination that can alias either source (MOVHLPS is a common example)."""
+        math_ops = {"ADDPS":"+", "SUBPS":"-", "MULPS":"*", "DIVPS":"/"}
+        unary = ("SQRTPS", "RSQRTPS", "RCPPS", "RSQRTSS", "RCPSS")
+        compares = ("CMPPS", "CMPSS", "CMPPD", "CMPSD")
+        forms = ("MINPS", "MAXPS", "MOVHLPS", "MOVLHPS", "MOVMSKPS", "CVTPS2PI", "CVTTPS2PI", "CVTPI2PS")
+        if m not in math_ops and m not in unary and m not in compares and m not in forms:
+            return None
+        if m == "CMPSD" and not names_an_xmm(ins):
+            return None
+        dst, src = ops[:2]
+        def lane(op, i):
+            return "c->xmm[%d][%d]" % (op.reg, i) if op.kind == "xmm" else "rd32(%s + %du)" % (addr_expr(op), 4*i)
+        def value(op, i, double=False):
+            if double:
+                return "sse_double((uint64_t)%s | (uint64_t)%s << 32)" % (lane(op,2*i), lane(op,2*i+1))
+            return "sse_float(%s)" % lane(op,i)
+        if m == "MOVMSKPS":
+            return [write_op(dst, 32, " | ".join("((%s >> 31) << %d)" % (lane(src,i),i) for i in range(4)))]
+        if m in ("MOVHLPS", "MOVLHPS"):
+            half = 2 if m == "MOVHLPS" else 0
+            target = 0 if m == "MOVHLPS" else 2
+            return ["uint32_t lo_ = %s, hi_ = %s;" % (lane(src,half),lane(src,half+1)),
+                    "c->xmm[%d][%d] = lo_; c->xmm[%d][%d] = hi_;" % (dst.reg,target,dst.reg,target+1)]
+        if m == "CVTPI2PS":
+            source = "c->mm[%d]" % src.reg if src.kind == "mm" else "rd64(%s)" % addr_expr(src)
+            return ["uint64_t value_ = %s;" % source,
+                    "c->xmm[%d][0] = sse_float_bits((float)(int32_t)value_);" % dst.reg,
+                    "c->xmm[%d][1] = sse_float_bits((float)(int32_t)(value_ >> 32));" % dst.reg,
+                    "c->fpu_tag = 0;"]
+        if m in ("CVTPS2PI", "CVTTPS2PI"):
+            return ["float lo_ = %s, hi_ = %s;" % (value(src,0),value(src,1)),
+                    "uint32_t lo_i_ = sse_i32(c, lo_, %d), hi_i_ = sse_i32(c, hi_, %d);" % ((m == "CVTTPS2PI",)*2),
+                    "c->mm[%d] = (uint64_t)lo_i_ | (uint64_t)hi_i_ << 32;" % dst.reg,
+                    "c->fpu_tag = 0;"]
+        double = m in ("CMPPD", "CMPSD")
+        scalar = m.endswith(("SS", "SD"))
+        count = 1 if scalar else 2 if double else 4
+        kind = "double" if double else "float"
+        L = []
+        for i in range(count):
+            if m not in unary:
+                L.append("%s a%d_ = %s;" % (kind,i,value(dst,i,double)))
+            L.append("%s b%d_ = %s;" % (kind,i,value(src,i,double)))
+        for i in range(count):
+            if m in compares:
+                L.append("uint32_t mask%d_ = sse_compare(a%d_, b%d_, %du);" % (i,i,i,ops[2].imm))
+                for j in range(2 if double else 1):
+                    L.append("c->xmm[%d][%d] = mask%d_;" % (dst.reg,i*(2 if double else 1)+j,i))
+                continue
+            if m in math_ops:
+                result = "a%d_ %s b%d_" % (i,math_ops[m],i)
+            elif m in ("MINPS", "MAXPS"):
+                result = "a%d_ %s b%d_ ? a%d_ : b%d_" % (i,"<" if m == "MINPS" else ">",i,i,i)
+            elif m in ("SQRTPS", "RSQRTPS", "RSQRTSS"):
+                result = ("1.0f / " if m.startswith("RSQRT") else "") + "recomp_sse_sqrtf(b%d_)" % i
+            else:
+                result = "1.0f / b%d_" % i
+            L.append("c->xmm[%d][%d] = sse_float_bits(%s);" % (dst.reg,i,result))
+        return L
+
     def emit_x87(self, fn, ins, m, ops):
         L = []
         st = lambda n: "ST(c, %d)" % n
@@ -3888,7 +3970,7 @@ class Translator(object):
                 L.append("fdrop(c);")
             return L
 
-        if m in ("FIST", "FISTP"):
+        if m in ("FIST", "FISTP", "FISTTP"):
             op = ops[0]
             if op.size == 16:
                 L.append("wr16(%s, (uint16_t)fist_i16(c));" % addr_expr(op))
@@ -3898,7 +3980,9 @@ class Translator(object):
                 L.append("wr64(%s, (uint64_t)fist_i64(c));" % addr_expr(op))
             else:
                 raise TranslateError("bad %s size" % m)
-            if m == "FISTP":
+            if m == "FISTTP":
+                L = [line.replace("fist_i", "fisttp_i") for line in L]
+            if m in ("FISTP", "FISTTP"):
                 L.append("fdrop(c);")
             return L
 
@@ -4070,8 +4154,10 @@ class Translator(object):
             return ["wr16(%s, c->fpu_cw);" % addr_expr(ops[0])]
         if m == "FLDCW":
             return ["x87_set_cw(c, rd16(%s));" % addr_expr(ops[0])]
-        if m == "FFREE":
-            return [";"]
+        if m in ("FFREE", "FFREEP"):
+            return ["ftag_put(c, (c->fpu_top + %du) & 7u, 3u);" % ops[-1].sti] + (["fdrop(c);"] if m == "FFREEP" else [])
+        if m in FCMOVCC:
+            return ["if (%s) fcopy(c, 0, %d);" % (FCMOVCC[m][0], ops[-1].sti)]
         if m in ("FSAVE", "FNSAVE"):
             return ["x87_fnsave(c, %s);" % addr_expr(ops[0])]
         if m == "FRSTOR":

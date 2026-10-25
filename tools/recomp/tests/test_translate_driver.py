@@ -73,6 +73,22 @@ def synthetic_image(code_at, base=0x00400000, size=0x2000):
     return img
 
 
+@pytest.mark.parametrize("code,expected", [
+    (b"\x0f\x28\x06\x0f\x29\x07\xc3", ["MOVAPS", "MOVAPS", "RET"]),
+    (b"\xd9\x36\xd9\x26\xc3", ["FNSTENV", "FLDENV", "RET"]),
+    (b"\xf2\x0f\x10\x06\xf2\x0f\xc2\xc1\x00\xc3", ["MOVSD", "CMPSD", "RET"]),
+])
+def test_recover_sse_and_environment_operands(code, expected):
+    entry = 0x401000
+    img = synthetic_image({entry:code})
+    insns = img.recover(entry, set())
+    assert [ins.mnem for ins in insns] == expected
+    assert len(insns[0].ops) > 0
+    if expected[0] == "MOVSD":
+        assert insns[0].ops == ["XMM0", "qword ptr [ESI]"]
+        assert insns[1].ops == ["XMM0", "XMM1", "0"]
+
+
 @pytest.mark.parametrize("pointer_kind", ["data", "pushed", "relocated"])
 @pytest.mark.parametrize("gap", [b"", b"\x0f\x0b\xf4"])
 def test_pointer_callback_keeps_branch_past_early_return(tmp_path,monkeypatch,pointer_kind,gap):

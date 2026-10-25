@@ -300,25 +300,99 @@ struct X86 {
      * use.  Initialise to 0xffff (the post-FINIT all-empty state). */
     uint16_t fpu_tag;
     uint32_t fs_base;
-    /* SSE2. The translator models the data-movement subset only -
-     * loads, stores, a dword broadcast - which is all a Delphi runtime's
-     * FillChar and Move use, and byte order is then the only thing that has
-     * to be right. There are eight in 32-bit mode. CPUID advertises no SSE,
+    /* Eight SSE registers in 32-bit mode, held as dword lanes for scalar and
+     * packed arithmetic, comparisons, conversions and bit-preserving moves.
+     * CPUID advertises no SSE,
      * so nothing chooses one of these paths from a feature test; the RTL
      * takes them unconditionally because every CPU it supports has SSE2.
-     * Held as dwords: every modelled form - load, store, MOVD, MOVQ and
-     * PSHUFD's selector - addresses the register in dword lanes, and on a
-     * little-endian host the byte order of a copy then takes care of
-     * itself. Lane 0 is the low four bytes. */
+     * Lane 0 is the low four bytes. */
     uint32_t xmm[8][4];
     /* The eight MMX registers. Kept apart from the x87 stack: a program that
      * leaves MMX without EMMS and then uses the FPU sees its old values, not
      * the MMX ones, which no game this runtime serves relies on. */
     uint64_t mm[8];
+    /* XOR encoding makes a zero-initialized CPU start at MXCSR reset (0x1f80).
+     * Guest rounding control must survive context switches and longjmp. */
+    uint32_t mxcsr_xor;
 };
 typedef struct X86 X86;
 
 /* ----------------------------------------------------------------- SSE */
+static inline uint32_t sse_mxcsr(const X86 *c) {
+    return c->mxcsr_xor ^ 0x1f80u;
+}
+static inline double sse_round(double value, unsigned mode) {
+    if (mode == 1)
+        return floor(value);
+    if (mode == 2)
+        return ceil(value);
+    if (mode == 3)
+        return trunc(value);
+    double lo = floor(value), hi = ceil(value);
+    if (value - lo < hi - value)
+        return lo;
+    if (value - lo > hi - value)
+        return hi;
+    return fmod(lo, 2.0) == 0.0 ? lo : hi;
+}
+/* SSE stores the integer indefinite for NaN/overflow, never a C cast outside
+ * its defined range. Track masked invalid/precision status for STMXCSR. */
+static inline uint32_t sse_i32(X86 *c, double value, int truncate) {
+    double rounded = sse_round(value, truncate ? 3u : (sse_mxcsr(c) >> 13) & 3u);
+    if (!(rounded >= -2147483648.0 && rounded <= 2147483647.0)) {
+        c->mxcsr_xor |= 1u;
+        return 0x80000000u;
+    }
+    if (value != rounded)
+        c->mxcsr_xor |= 0x20u;
+    return (uint32_t)(int32_t)rounded;
+}
+static inline float sse_float(uint32_t bits) {
+    float value;
+    memcpy(&value, &bits, 4);
+    return value;
+}
+static inline uint32_t sse_float_bits(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, 4);
+    return bits;
+}
+static inline double sse_double(uint64_t bits) {
+    double value;
+    memcpy(&value, &bits, 8);
+    return value;
+}
+static inline uint32_t sse_compare(double a, double b, uint32_t predicate) {
+    const int unordered = a != a || b != b;
+    int result;
+    switch (predicate & 7u) {
+    case 0:
+        result = a == b;
+        break;
+    case 1:
+        result = a < b;
+        break;
+    case 2:
+        result = a <= b;
+        break;
+    case 3:
+        result = unordered;
+        break;
+    case 4:
+        result = a != b;
+        break;
+    case 5:
+        result = !(a < b);
+        break;
+    case 6:
+        result = !(a <= b);
+        break;
+    default:
+        result = !unordered;
+        break;
+    }
+    return result ? UINT32_MAX : 0;
+}
 
 /* An XMM register holds dwords (see struct X86), so a scalar double or float
  * in its low lanes is read and written through these. Scalar SSE arithmetic
@@ -1528,6 +1602,31 @@ static inline int64_t fist_i64(X86 *c) {
     if (c->st_exact[c->fpu_top])
         return (int64_t)c->st_bits[c->fpu_top];
     return fto_i64(c, ST(c, 0));
+}
+
+/* FISTTP ignores x87 RC. Bounds are checked before every narrowing cast. */
+static inline int16_t fisttp_i16(X86 *c) {
+    double v = trunc(ST(c, 0));
+    if (v >= -32768.0 && v <= 32767.0)
+        return (int16_t)v;
+    c->fpu_sw |= 1u;
+    return INT16_MIN;
+}
+static inline int32_t fisttp_i32(X86 *c) {
+    double v = trunc(ST(c, 0));
+    if (v >= -2147483648.0 && v <= 2147483647.0)
+        return (int32_t)v;
+    c->fpu_sw |= 1u;
+    return INT32_MIN;
+}
+static inline int64_t fisttp_i64(X86 *c) {
+    if (c->st_exact[c->fpu_top])
+        return (int64_t)c->st_bits[c->fpu_top];
+    double v = trunc(ST(c, 0));
+    if (v >= -9223372036854775808.0 && v < 9223372036854775808.0)
+        return (int64_t)v;
+    c->fpu_sw |= 1u;
+    return INT64_MIN;
 }
 
 /* FPREM / FPREM1.
