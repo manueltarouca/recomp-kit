@@ -57,6 +57,7 @@
 #include "../gpu/fake/fake_device.h"
 #include "../gpu/gpu_factory.h"
 #include "../../dx/host_d9.h"
+#include "../../dx/d3d9_msl.h"
 #include "../../dx/d3d9_shader.h"
 #include "../../dx/d3d9_pipeline.h"
 
@@ -9573,6 +9574,86 @@ static void d9_pixel(uint32_t id, uint32_t x, uint32_t y, uint8_t out[4]) {
     memcpy(out, &px[(y * 8 + x) * 4], 4);
 }
 
+// ps.1.x texm3x2pad/texm3x2tex: u = dot(texcoord1.xyz, t0.rgb), v =
+// dot(texcoord2.xyz, t0.rgb), then stage 2 sampled at (u, v). Stage 0 holds
+// one red texel, so u and v are texcoord 1's and 2's x: (0.25, 0.75) reads
+// texel (0, 1) of stage 2. Stage 2 is used by no `tex` instruction, so it is
+// bound only if the sampler mask counts texm3x2tex.
+static void test_d3d9_ps11_texm3x2() {
+    const uint32_t RT = 90011, T0 = 90012, T2 = 90013;
+    HostD9TextureDesc rt{RT, HOST_D9_TEX_2D, 8, 8, 1, 21, HOST_D9_USAGE_RENDERTARGET};
+    host_d9_texture_define(&rt);
+    HostD9TextureDesc t0{T0, HOST_D9_TEX_2D, 1, 1, 1, 21, 0};
+    host_d9_texture_define(&t0);
+    HostD9TextureDesc t2{T2, HOST_D9_TEX_2D, 2, 2, 1, 21, 0};
+    host_d9_texture_define(&t2);
+    const uint8_t red[4] = {0, 0, 0xff, 0xff}; // BGRA
+    host_d9_texture_upload(T0, 0, 0, red, 4);
+    const uint8_t lut[16] = {0x11, 0x11, 0x11, 0xff, 0x22, 0x22, 0x22, 0xff,  // row 0
+                             0x00, 0xff, 0x00, 0xff, 0x44, 0x44, 0x44, 0xff}; // row 1
+    host_d9_texture_upload(T2, 0, 0, lut, 8);
+    HostD9Target target{};
+    target.color[0] = {RT, 0, 0};
+    int32_t vp[4] = {0, 0, 8, 8};
+    host_d9_clear(&target, vp, 0, nullptr, 1, 0xff000000u, 1.0f, 0);
+
+    // vs.1.1: dcl_position v0; dcl_texcoord0..2 v1..v3; mov oPos, v0;
+    // mov oT0..oT2, v1..v3.
+    std::vector<uint8_t> vs = d9_words(
+        {0xFFFE0101u, 0x0000001Fu, 0x80000000u, 0x900F0000u, 0x0000001Fu, 0x80000005u, 0x900F0001u,
+         0x0000001Fu, 0x80010005u, 0x900F0002u, 0x0000001Fu, 0x80020005u, 0x900F0003u, 0x00000001u,
+         0xC00F0000u, 0x90E40000u, 0x00000001u, 0xE00F0000u, 0x90E40001u, 0x00000001u, 0xE00F0001u,
+         0x90E40002u, 0x00000001u, 0xE00F0002u, 0x90E40003u, 0x0000FFFFu});
+    // ps.1.1: tex t0; texm3x2pad t1, t0; texm3x2tex t2, t0; mov r0, t2.
+    std::vector<uint8_t> ps = d9_words(
+        {0xFFFF0101u, 0x00000042u, 0xB00F0000u, 0x00000047u, 0xB00F0001u, 0xB0E40000u, 0x00000048u,
+         0xB00F0002u, 0xB0E40000u, 0x00000001u, 0x800F0000u, 0xB0E40002u, 0x0000FFFFu});
+    CHECK_EQ(d9msl::pixel_sampler_mask(d9sh::program_for(ps)), 0x5u); // stages 0 and 2
+    // float4 position, then three float2 texture coordinates.
+    const uint8_t decl[40] = {0, 0, 0, 0, 3, 0, 0,  0, 0, 0, 16, 0, 1,    0, 5, 0, 0,  0, 24, 0,
+                              1, 0, 5, 1, 0, 0, 32, 0, 1, 0, 5,  2, 0xff, 0, 0, 0, 17, 0, 0,  0};
+    struct V {
+        float x, y, z, w, u0, v0, u1, v1, u2, v2;
+    } verts[4] = {{-1, 1, 0.5f, 1, 0.5f, 0.5f, 0.25f, 0, 0.75f, 0},
+                  {1, 1, 0.5f, 1, 0.5f, 0.5f, 0.25f, 0, 0.75f, 0},
+                  {-1, -1, 0.5f, 1, 0.5f, 0.5f, 0.25f, 0, 0.75f, 0},
+                  {1, -1, 0.5f, 1, 0.5f, 0.5f, 0.25f, 0, 0.75f, 0}};
+    D9Pipeline pl;
+    for (int st = 0; st < 3; ++st)
+        pl.sampler_state[st][5] = pl.sampler_state[st][6] = 1; // point
+    static const float none[4] = {0, 0, 0, 0};
+    HostD9Draw d{};
+    d.target = target;
+    memcpy(d.viewport, vp, sizeof vp);
+    d.depth_range[1] = 1.0f;
+    d.vs = vs.data();
+    d.vs_size = (uint32_t)vs.size();
+    d.ps = ps.data();
+    d.ps_size = (uint32_t)ps.size();
+    d.vconst = none;
+    d.vconst_count = 1;
+    d.decl = decl;
+    d.decl_size = sizeof decl;
+    d.decl_id = 3;
+    d.stream[0].stride = sizeof(V);
+    d.inline_vertices = (const uint8_t *)verts;
+    d.inline_bytes = sizeof verts;
+    d.primitive = 5;
+    d.primitive_count = 2;
+    d.sampler_texture[0] = T0;
+    d.sampler_texture[2] = T2;
+    d.sampler_state = &pl.sampler_state[0][0];
+    d.render_state = pl.rs;
+    d.render_state_set = (const uint8_t *)pl.rs_set;
+    host_d9_draw(&d);
+    uint8_t p[4];
+    d9_pixel(RT, 4, 4, p);
+    CHECK(p[1] == 0xff && p[0] == 0 && p[2] == 0); // BGRA: green
+    host_d9_texture_drop(RT);
+    host_d9_texture_drop(T0);
+    host_d9_texture_drop(T2);
+}
+
 static void test_d3d9_gpu_renderer() {
     const uint32_t RT = 90001, DEPTH = 90002;
     HostD9TextureDesc rt{RT, HOST_D9_TEX_2D, 8, 8, 1, 21, HOST_D9_USAGE_RENDERTARGET};
@@ -9843,6 +9924,7 @@ int main(int argc, char **argv) {
             return 2;
         }
         test_d3d9_gpu_renderer();
+        test_d3d9_ps11_texm3x2();
         printf("d3d9 GPU: %d checks, %d failures\n", g_checks, g_failures);
         return g_failures ? 1 : 0;
     }
