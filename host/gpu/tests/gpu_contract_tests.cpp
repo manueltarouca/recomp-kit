@@ -6,6 +6,7 @@
 // override selects it.
 #include "../../../platform/os.h"
 #include "../gpu_factory.h"
+#include <algorithm>
 
 #include <math.h>
 #include <mutex>
