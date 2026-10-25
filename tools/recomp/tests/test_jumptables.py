@@ -232,3 +232,44 @@ def test_negated_index_after_a_guard_reads_downwards():
     entries[1] = GARBAGE
     targets, _ = decode(lines, table(entries))
     assert targets == [FN + 0x20 + 0x10 * k for k in range(8)]
+
+
+def test_bounded_table_recovers_targets_before_the_entry():
+    insns = T.parse_listing_text(
+        "%08x  RET\n%08x  CMP EAX,0x0\n%08x  JA 0x%08x\n"
+        "%08x  JMP dword ptr [EAX*0x4 + 0x%x]\n%08x  RET\n" %
+        (FN-0x100,FN,FN+3,FN+0x40,FN+5,TABLE,FN+0x40))
+    target = FN-0x80
+    fn = T.Function(FN,"backward",0x100,insns)
+    image = FakeImage([i.addr for i in insns]+[target],{TABLE:target})
+    fn.measure(image)
+    tr = T.Translator(image,{FN},Opts())
+    tr.prepare(fn)
+    assert target in tr.unlisted_targets
+    assert tr.jumptables[(FN,FN+5)] == [target]
+
+
+@pytest.mark.parametrize("clobber", [False, True])
+def test_byte_index_bound_through_lea(clobber):
+    byte_base = TABLE+0x100
+    lines = [(0,"LEA EAX,dword ptr [ECX + -0x5]")]
+    if clobber:
+        lines.append((3,"INC ECX"))
+    lines += [(4,"CMP EAX,0x2"),(7,"JA 0x%08x" % (FN+0x40)),
+              (9,"MOVZX EAX,byte ptr [ECX + 0x%x]" % byte_base),
+              (16,"JMP dword ptr [EAX*0x4 + 0x%x]" % TABLE),
+              (0x20,"RET"),(0x30,"RET"),(0x40,"RET")]
+    insns = T.parse_listing_text("\n".join("%08x  %s" % (FN+off,text) for off,text in lines))
+    fn = T.Function(FN,"lea_guard",0x100,insns)
+    image = FakeImage([i.addr for i in insns],table({0:GARBAGE,1:FN+0x20,3:FN+0x30}))
+    image.rd8 = lambda address: {byte_base+5:1,byte_base+6:3,byte_base+7:1}.get(address)
+    fn.measure(image)
+    tr = T.Translator(image,{FN},Opts())
+    tr.prepare(fn)
+    targets = tr.jumptables.get((FN,FN+16))
+    if clobber:
+        assert targets is None
+    else:
+        assert targets == [FN+0x20,FN+0x30,FN+0x20]
+        assert (byte_base+5,byte_base+8) in tr.table_ranges
+        tr.prepare(fn,strict=True)

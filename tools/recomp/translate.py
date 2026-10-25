@@ -2260,6 +2260,16 @@ class Translator(object):
             self.table_ranges.add((dword_base, dword_base + 4 * info))
             self.stats["_jmp_table_bounded"] += 1
             return targets
+        if kind == "bounded_offset":
+            first, count = info
+            targets = []
+            for k in range(first, first + count):
+                t = self.image.rd32(dword_base + 4 * k)
+                self.want_target(fn, ins, t, k)
+                targets.append(t)
+            self.table_ranges.add((dword_base + 4 * first, dword_base + 4 * (first + count)))
+            self.stats["_jmp_table_bounded"] += 1
+            return targets
 
         ranged = None if byte_offset else self.index_range(fn, i, op.index)
         if ranged is not None:
@@ -2491,7 +2501,8 @@ class Translator(object):
         # body, so bound recovery by a generous window past the entry rather
         # than by fn.end.
         if (not self.strict and target is not None
-                and fn.addr <= target < fn.addr + 0x10000):
+                and min(fn.addr, fn.insns[0].addr) <= target < fn.addr + 0x10000
+                and self.image.is_exec(target)):
             self.unlisted_targets.add(target)
             return
         raise TranslateError(
@@ -2510,7 +2521,14 @@ class Translator(object):
             ins = fn.insns[j]
             if ins.mnem == "CMP" and len(ins.ops) == 2:
                 b = self.cmp_bound_here(fn, j, idx_reg)
-                return ("bounded", b) if b is not None else (None, None)
+                if b is not None:
+                    return ("bounded", b)
+                alias = self.lea_bound_here(fn, j, idx_reg)
+                if alias is not None:
+                    return ("bounded_offset", alias)
+                # An unrelated compare is not the producer of this index.
+                # Earlier guards still validate their own flags through it.
+                continue
             if not self.writes_reg32(ins, idx_reg):
                 continue
             if ins.mnem in ("MOV", "MOVZX", "MOVSX") and len(ins.ops) == 2:
@@ -2524,8 +2542,43 @@ class Translator(object):
                     inner = self.index_source(fn, j, src.base)
                     if inner[0] == "bounded":
                         return ("byte_table", (src.disp, inner[1]))
+                    if inner[0] == "bounded_offset":
+                        first, count = inner[1]
+                        return ("byte_table", (src.disp + first, count))
             return (None, None)
         return (None, None)
+
+    def lea_bound_here(self, fn, j, idx_reg):
+        """CMP of a prior LEA alias bounds the original index at an offset.
+
+        LEA bound,[index-5]; CMP bound,2; JA default leaves index in 5..7.
+        Stop at either register's intervening write rather than applying a
+        stale alias to a byte/dword table read.
+        """
+        try:
+            compared = parse_operand(fn.insns[j].ops[0])
+        except TranslateError:
+            return None
+        if compared.kind != "reg" or compared.reg == idx_reg:
+            return None
+        count = self.cmp_bound_here(fn, j, compared.reg)
+        if count is None:
+            return None
+        for k in range(j - 1, max(-1, j - 16), -1):
+            candidate = fn.insns[k]
+            if self.writes_reg32(candidate, idx_reg):
+                return None
+            if not self.writes_reg32(candidate, compared.reg):
+                continue
+            if candidate.mnem == "LEA" and len(candidate.ops) == 2:
+                try:
+                    source = parse_operand(candidate.ops[1])
+                except TranslateError:
+                    return None
+                if source.kind == "mem" and source.base == idx_reg and source.index is None:
+                    return (-source.disp, count)
+            return None
+        return None
 
     #: How many index values reach the table, given `CMP idx,N` and the guard
     #: that follows it.  Only a guard that branches AWAY on out-of-range values

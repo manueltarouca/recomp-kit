@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Recover jump-table targets before a function's entry when its listing
+  starts earlier, and decode byte index tables guarded through a LEA-derived
+  bound. Register-clobber checks prevent stale bounds. Fixes #18.
+
 - Keep decoded opcode bytes and relative CALL/JMP/Jcc operands out of the
   translator's data-pointer scan. Accidental address-shaped encodings no
   longer invent entries that split real functions; absolute address
