@@ -380,11 +380,11 @@ class Renderer final : public D9Backend {
         // Render targets and depth buffers render at the chosen scale; the
         // guest keeps seeing its own sizes.
         bool target = (d.usage & (HOST_D9_USAGE_RENDERTARGET | HOST_D9_USAGE_DEPTH)) || depth;
-        if (target && !scale_chosen_ && d.kind == HOST_D9_TEX_2D) {
-            // The first target is the back buffer; its height is what the
-            // scale is measured against from then on.
+        if (target && !scale_chosen_ && d.kind == HOST_D9_TEX_2D &&
+            set_render_scale_base(d.height, base_rows_)) {
+            // Ignore small bookkeeping targets when choosing the initial
+            // rendering size. Present can update it from a real back buffer.
             scale_chosen_ = true;
-            base_rows_ = d.height;
             const float want = wanted_scale();
             if (want > 0)
                 scale_ = want;
@@ -668,11 +668,22 @@ class Renderer final : public D9Backend {
             mix(mix((uint64_t)d.decl_id << 32 | d.decl_size, vs_key), fnv(d.decl, d.decl_size));
         {
             uint64_t strides = 0;
-            for (int i = 0; i < 8; ++i)
+            for (int i = 0; i < 8; ++i) {
                 strides = strides * 1099511628211ull + d.stream[i].stride;
+                strides =
+                    mix(strides, uint64_t(d.stream[i].frequency & HOST_D9_STREAM_INSTANCE) << 32 |
+                                     host_d9_stream_rate(d.stream[i].frequency));
+            }
             vkey = mix(vkey, strides);
         }
         MTLVertexDescriptor *vdesc = vertex_descriptor(d, vp, vkey, ascale);
+        for (uint32_t stream = 0; stream < 8; ++stream)
+            if ((stream_mask_ >> stream & 1) &&
+                !(d.stream[stream].frequency & HOST_D9_STREAM_INSTANCE) &&
+                host_d9_stream_rate(d.stream[stream].frequency) > 1) {
+                skip("software vertex-frequency division is unsupported");
+                return;
+            }
 
         // Pipeline.
         uint64_t key = mix(mix(vs_key, ps_key), variant.key());
@@ -1221,7 +1232,7 @@ class Renderer final : public D9Backend {
             return;
         }
         Tex &t = it->second;
-        base_rows_ = t.desc.height;
+        set_render_scale_base(t.desc.height, base_rows_);
         w = (uint32_t)t.texture.width;
         h = (uint32_t)t.texture.height;
         keep_presented(t, w, h);
@@ -1720,7 +1731,10 @@ class Renderer final : public D9Backend {
                 continue;
             uint32_t stride = d.stream[s].stride ? d.stream[s].stride : stream_end[s];
             desc.layouts[s].stride = std::max(stride, stream_end[s]);
-            desc.layouts[s].stepFunction = MTLVertexStepFunctionPerVertex;
+            desc.layouts[s].stepFunction = (d.stream[s].frequency & HOST_D9_STREAM_INSTANCE)
+                                               ? MTLVertexStepFunctionPerInstance
+                                               : MTLVertexStepFunctionPerVertex;
+            desc.layouts[s].stepRate = host_d9_stream_rate(d.stream[s].frequency);
         }
         if (zero) {
             desc.layouts[8].stride = 16;
@@ -2008,6 +2022,7 @@ class Renderer final : public D9Backend {
     }
 
     void encode_primitives(const HostD9Draw &d) {
+        const uint32_t instances = d.instance_count ? d.instance_count : 1;
         MTLPrimitiveType type;
         uint32_t count = d.primitive_count;
         bool fan = false;
@@ -2042,7 +2057,10 @@ class Renderer final : public D9Backend {
             return;
         bool indexed = d.index_buffer || d.inline_indices;
         if (!indexed && !fan) {
-            [enc_ drawPrimitives:type vertexStart:d.start vertexCount:count];
+            [enc_ drawPrimitives:type
+                     vertexStart:d.start
+                     vertexCount:count
+                   instanceCount:instances];
             return;
         }
         MTLIndexType itype = d.index_size == 4 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16;
@@ -2060,7 +2078,7 @@ class Renderer final : public D9Backend {
                                   indexType:itype
                                 indexBuffer:b->second.buffer
                           indexBufferOffset:d.start * isize
-                              instanceCount:1
+                              instanceCount:instances
                                  baseVertex:d.base_vertex
                                baseInstance:0];
             } else {
@@ -2071,7 +2089,8 @@ class Renderer final : public D9Backend {
                                  indexCount:count
                                   indexType:itype
                                 indexBuffer:b
-                          indexBufferOffset:transient_used_ - ((count * isize + 15) & ~15u)];
+                          indexBufferOffset:transient_used_ - ((count * isize + 15) & ~15u)
+                              instanceCount:instances];
             }
             return;
         }
@@ -2109,7 +2128,8 @@ class Renderer final : public D9Backend {
                          indexCount:list.size()
                           indexType:MTLIndexTypeUInt32
                         indexBuffer:b
-                  indexBufferOffset:off];
+                  indexBufferOffset:off
+                      instanceCount:instances];
     }
 
     void dump(Tex &t, uint32_t w, uint32_t h) {

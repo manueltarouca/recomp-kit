@@ -1,5 +1,14 @@
 # Testing
 
+`d3d9_device_tests` checks shader bytecode bounds, immutable copies, COM
+binding/device lifetimes, GetFunction/GetDevice, creation parameters and
+CPU instancing across streams 1-7 with dividers one and two. It also checks
+the GPU draw seam's instance metadata, all shader source generators and the
+render-scale base rule. `d3d9_gpu_tests` reads back instanced colors and screen
+derivatives on the selected GPU backend; Metal additionally checks SM3 pixel
+position/face and dividers above one. Vulkan checks clean skips for unsupported
+dividers and misc inputs. WGSL source emission has no browser execution check.
+
 `guest_memory_tests` and `guest_memory_2gb_tests` check readable arena edges
 and subprocess faults above the accessible range, including accesses across
 the highest 32-bit address. `null_guard_tests` checks all scalar accessors

@@ -89,6 +89,20 @@ Enhanced can render the world at drawable resolution with separately scaled UI.
 Wide view expands the world only when the drawable is wider than the selected
 game canvas. The game's own docs (populous-recomp's `docs/DISPLAY.md`) describe the visible behavior.
 
+Direct3D 9 shader objects keep one immutable bounded bytecode copy. Pipeline
+bindings share it and retain the shader. External shader references retain
+their device; a binding alone does not retain it back, avoiding a cycle.
+The device's stored creation parameters remain available through its COM ABI.
+Per-stream frequencies travel with each GPU draw. CPU vertex fetch reads
+streams 0-7 and selects instance rows by the stream's divider. Metal uses
+per-instance layouts and step rates. Core Vulkan/WebGPU use instance-rate
+bindings for divider one and skip unsupported larger dividers explicitly.
+Metal maps SM3 vPos to pixel coordinates minus the half-pixel offset and
+vFace to +/-1. GLSL/WGSL reject those misc registers; screen derivatives are
+generated for each language, with Metal/Vulkan readback coverage. Targets
+below 64 rows cannot establish or overwrite the render-scale base.
+
+
 ## Timing, input and settings
 
 The render limit and animation clock are separate from the simulation clock.

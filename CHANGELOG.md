@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Implement Direct3D 9 shader objects with bounded bytecode copies, shared
+  binding storage, GetFunction/GetDevice and reference-safe teardown. Return
+  device creation parameters and retain per-stream instance frequencies.
+  Draw instances across CPU streams 1-7 and GPU layouts; Metal supports
+  instance dividers above one, while Vulkan/WebGPU skip unsupported dividers
+  explicitly. Generate Metal SM3 pixel position/face inputs and screen
+  derivatives; derivatives also render on Vulkan. Tiny render targets no
+  longer determine the render-scale base. Fixes #31.
+
 - Reserve the native 32-bit guest address range with an inaccessible upper
   guard and derive runtime regions from the configured arena size. Enable
   optional null-page faults in Debug builds, gate environment-selected native

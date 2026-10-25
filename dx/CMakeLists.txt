@@ -22,6 +22,14 @@ target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx_null 1)
 
 if(NOT IOS AND NOT ANDROID)
+add_executable(d3d9_device_tests tests/d3d9_device_tests.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(d3d9_device_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(d3d9_device_tests PRIVATE ${POP_WARN_WERROR})
+pop_optimize(d3d9_device_tests 1)
+pop_test_binary(d3d9_device_tests)
+add_test(NAME d3d9_device_tests COMMAND d3d9_device_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(d3d9_device_tests PROPERTIES LABELS nogame)
 add_executable(guest_layout_tests tests/guest_layout_tests.cpp
   ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
 target_link_libraries(guest_layout_tests PRIVATE recomp_platform recomp_dx recomp_runtime)

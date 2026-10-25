@@ -10,6 +10,7 @@
 #include "com.h"
 #include "d3d9_pipeline.h"
 #include "d3d9_shader.h"
+#include "host_d9.h"
 #include "../runtime/guest.h"
 
 #include <algorithm>
@@ -686,7 +687,7 @@ struct Machine {
 // Vertex fetch
 // ---------------------------------------------------------------------------
 struct Elem {
-    uint16_t offset;
+    uint16_t offset, stream;
     uint8_t type, usage, index;
 };
 
@@ -696,12 +697,20 @@ std::vector<Elem> elements(const std::vector<uint8_t> &decl) {
         uint16_t stream = (uint16_t)(decl[i] | decl[i + 1] << 8);
         if (stream == 0xff)
             break;
-        if (stream != 0)
+        if (stream >= 8)
             continue;
-        out.push_back(Elem{(uint16_t)(decl[i + 2] | decl[i + 3] << 8), decl[i + 4], decl[i + 6],
-                           decl[i + 7]});
+        out.push_back(Elem{(uint16_t)(decl[i + 2] | decl[i + 3] << 8), stream, decl[i + 4],
+                           decl[i + 6], decl[i + 7]});
     }
     return out;
+}
+
+uint32_t element_bytes(uint8_t type) {
+    if (type <= 3)
+        return 4u * (type + 1u);
+    if (type == 4 || type == 5 || type == 6 || type == 8)
+        return 4;
+    return type == 7 ? 8 : 0;
 }
 
 V4 fetch(const uint8_t *vp, const Elem &e) {
@@ -990,11 +999,16 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
     }
     const Program &vs = program_for(pl.vs.vec());
     const Program &ps = program_for(pl.ps.vec());
-    if (!vs.ok || !ps.ok || vs.major >= 3 || ps.major >= 3) {
-        const std::string why = (!vs.ok || !ps.ok)
-                                    ? std::string(!vs.ok ? "vertex" : "pixel") +
-                                          " shader: " + (!vs.ok ? vs.why : ps.why)
-                                    : std::string("shader model 3 runs on the GPU renderer only");
+    const auto derivative = [](const Inst &in) { return in.op == OP_DSX || in.op == OP_DSY; };
+    const bool derivatives = std::any_of(ps.code.begin(), ps.code.end(), derivative) ||
+                             std::any_of(vs.code.begin(), vs.code.end(), derivative);
+    if (!vs.ok || !ps.ok || vs.major >= 3 || ps.major >= 3 || derivatives) {
+        const std::string why =
+            (!vs.ok || !ps.ok)
+                ? std::string(!vs.ok ? "vertex" : "pixel") +
+                      " shader: " + (!vs.ok ? vs.why : ps.why)
+                : std::string(derivatives ? "screen derivatives run on the GPU renderer only"
+                                          : "shader model 3 runs on the GPU renderer only");
         log_once(("d3d9.raster.skip." + why).c_str(), "d3d9 raster: skipped a draw: %s",
                  why.c_str());
         return;
@@ -1036,6 +1050,7 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
 
     // Run the vertex shader once per used vertex.
     std::unordered_map<int64_t, Out> transformed;
+    uint32_t instance = 0;
     auto shade_vertex = [&](int64_t vi) -> const Out & {
         auto it = transformed.find(vi);
         if (it != transformed.end())
@@ -1043,22 +1058,42 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
         Machine m;
         m.p = &vs;
         m.pl = &pl;
-        const uint8_t *vp = nullptr;
-        if (vi >= 0 && call.vertex_data) {
-            size_t off = (size_t)vi * call.stride;
-            if (off + call.stride <= call.vertex_bytes)
-                vp = call.vertex_data + off;
-        } else if (vi >= 0) {
-            uint32_t addr = call.vertices + (uint32_t)vi * call.stride;
-            if (gm_fits(addr, call.stride))
-                vp = gm_ptr(addr);
-        }
-        if (vp)
+        if (vi >= 0)
             for (const DclIn &d : vs.inputs)
                 for (const Elem &e : elems)
-                    if (e.usage == d.usage && e.index == d.usage_index &&
-                        e.offset + 4u <= call.stride)
-                        m.in[d.index & 15] = fetch(vp, e);
+                    if (e.usage == d.usage && e.index == d.usage_index) {
+                        const auto &stream = pl.stream[e.stream];
+                        const uint32_t rate = host_d9_stream_rate(stream.frequency);
+                        const uint64_t index = (stream.frequency & HOST_D9_STREAM_INSTANCE)
+                                                   ? instance / rate
+                                                   : uint64_t(vi) / rate;
+                        const uint8_t *data = nullptr;
+                        uint64_t size = 0, offset = 0;
+                        uint32_t stride = call.stride;
+                        if (!e.stream) {
+                            data = call.vertex_data;
+                            size = call.vertex_bytes;
+                            if (!data && call.vertices < GUEST_SIZE) {
+                                data = gm_ptr(call.vertices);
+                                size = GUEST_SIZE - call.vertices;
+                            }
+                        } else if (ComObj *vb = com_get(stream.vb); vb && vb->kind == K_D3D9VB) {
+                            data = vb->pixels && vb->lock_count > 0 ? gm_ptr(vb->pixels)
+                                                                    : vb->blob.data();
+                            size = vb->blob.size();
+                            offset = stream.offset;
+                            stride = stream.stride;
+                        }
+                        const uint32_t bytes = element_bytes(e.type);
+                        if (!data || !bytes || (stride && e.offset + bytes > stride) ||
+                            offset > size || e.offset + bytes > size - offset)
+                            continue;
+                        const uint64_t available = size - offset - e.offset - bytes;
+                        if (stride && index > available / stride)
+                            continue;
+                        offset += index * stride;
+                        m.in[d.index & 15] = fetch(data + offset, e);
+                    }
         m.run();
         Out o;
         o.pos = m.opos;
@@ -1231,33 +1266,39 @@ void d9_raster_draw(ComObj *device, ComObj *target, const std::vector<uint8_t> &
         }
     };
 
-    for (uint32_t p = 0; p < call.prim_count; ++p) {
-        uint32_t i0, i1, i2;
-        if (call.prim == 4) {
-            i0 = 3 * p;
-            i1 = 3 * p + 1;
-            i2 = 3 * p + 2;
-        } else if (call.prim == 5) {
-            i0 = p;
-            i1 = p + 1;
-            i2 = p + 2;
-            if (p & 1)
-                std::swap(i0, i1);
-        } else {
-            i0 = 0;
-            i1 = p + 1;
-            i2 = p + 2;
+    const uint32_t instances = (pl.stream[0].frequency & HOST_D9_STREAM_INDEXED)
+                                   ? pl.stream[0].frequency & HOST_D9_STREAM_DIVIDER
+                                   : 1;
+    for (instance = 0; instance < instances; ++instance) {
+        transformed.clear(); // Per-instance inputs change the same vertex's result.
+        for (uint32_t p = 0; p < call.prim_count; ++p) {
+            uint32_t i0, i1, i2;
+            if (call.prim == 4) {
+                i0 = 3 * p;
+                i1 = 3 * p + 1;
+                i2 = 3 * p + 2;
+            } else if (call.prim == 5) {
+                i0 = p;
+                i1 = p + 1;
+                i2 = p + 2;
+                if (p & 1)
+                    std::swap(i0, i1);
+            } else {
+                i0 = 0;
+                i1 = p + 1;
+                i2 = p + 2;
+            }
+            if (i2 >= nverts)
+                break;
+            const Out a = shade_vertex(vertex_index(i0));
+            if (!have_first) {
+                have_first = true;
+                first_w = a.pos[3];
+            }
+            const Out b = shade_vertex(vertex_index(i1));
+            const Out c = shade_vertex(vertex_index(i2));
+            draw_triangle(a, b, c);
         }
-        if (i2 >= nverts)
-            break;
-        const Out a = shade_vertex(vertex_index(i0));
-        if (!have_first) {
-            have_first = true;
-            first_w = a.pos[3];
-        }
-        const Out b = shade_vertex(vertex_index(i1));
-        const Out c = shade_vertex(vertex_index(i2));
-        draw_triangle(a, b, c);
     }
     static uint32_t reported = 0;
     if (++reported <= 16)
