@@ -73,6 +73,28 @@ def synthetic_image(code_at, base=0x00400000, size=0x2000):
     return img
 
 
+@pytest.mark.parametrize("pointer_kind", ["data", "pushed", "relocated"])
+@pytest.mark.parametrize("gap", [b"", b"\x0f\x0b\xf4"])
+def test_pointer_callback_keeps_branch_past_early_return(tmp_path,monkeypatch,pointer_kind,gap):
+    """A guessed callback's second return path belongs to the same body (#23)."""
+    import struct
+    entry, callback, helper, slot = 0x601000,0x601020,0x601100,0x601800
+    code = (b"\xe8"+struct.pack("<i",helper-callback-5)+b"\x84\xc0\x75"+
+            bytes([3+len(gap)])+b"\x31\xc0\xc3"+gap+b"\x6a\x01\x58\xc3")
+    entry_code = (b"\x68"+struct.pack("<I",callback)+b"\xc3" if pointer_kind == "pushed" else b"\xc3")
+    image = synthetic_image({entry:entry_code,callback-1:b"\x90"+code,helper:b"\xc3",
+                             slot:struct.pack("<I",callback)},base=0x600000)
+    if pointer_kind == "relocated":
+        image.relocated_pointers = lambda: {callback:slot}
+    text = translate_entry_fixture(tmp_path,monkeypatch,image,{entry:entry_code,helper:b"\xc3"})
+    assert "void fn_%08x(" % callback in text
+    tail = callback+12+len(gap)
+    assert "/* %08x PUSH" % tail in text
+    assert "goto L_%08x;" % tail in text
+    assert "UD2" not in text and "HLT" not in text
+    assert "recomp_unknown_call(c, 0x%xu)" % callback not in text
+
+
 def _walker_image(slots):
     """A __initterm-shaped walker, a caller naming a range, and that range."""
     import struct
