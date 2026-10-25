@@ -4,6 +4,7 @@
 #include "present.h"
 #include "present_frame.h"
 #include "present_test.h"
+#include "frame_pacing.h"
 #include "performance_overlay.h"
 #include "d3d_render.h"
 #include "input_gate.h"
@@ -116,6 +117,7 @@ struct Service : std::enable_shared_from_this<Service> {
     double last_link_tick = -1, window_started = -1;
     unsigned faults = 0, logged_faults = 0;
     double frame_period = 1.0 / 60, fake_now = 0;
+    double last_repeat_ts = -1;
     void fault(unsigned bit, const char *reason) { // mutex held
         if (logged_faults & bit)
             return;
@@ -206,6 +208,12 @@ struct Service : std::enable_shared_from_this<Service> {
     CompositorSceneHistory history;
     uint64_t history_epoch = 0;
     std::shared_ptr<Composite> cached;
+    // Composites no frame, reader or cache still holds, kept for reuse. A new
+    // drawable-sized texture per frame meant a fresh host staging allocation
+    // each time (tens of MB at 4K); the driver serialises those allocations
+    // behind a lock the guest's own GPU calls also take, which stalled it.
+    std::mutex composite_pool_mutex;
+    std::vector<std::shared_ptr<Composite>> composite_pool;
     std::shared_ptr<Composite> cached_settings;
     UiFrame cached_ui{};
 #ifdef POPM_PRESENT_HAS_UI_LAYER
@@ -516,6 +524,17 @@ struct Service : std::enable_shared_from_this<Service> {
             {w, h, format, gpu::UsageSampled | gpu::UsageRenderTarget | gpu::UsageCpu, 1});
     }
     std::shared_ptr<Composite> composite(int w, int h, gpu::Format format) {
+        std::lock_guard pool_lock(composite_pool_mutex);
+        // use_count() == 1: only the pool holds it, so nothing can take a new
+        // reference while we look. GPU order is safe: every pass and copy
+        // starts with a full barrier, so a new write follows earlier reads.
+        for (auto &c : composite_pool)
+            if (c.use_count() == 1 && c->w == w && c->h == h && c->format == format)
+                return c;
+        if (composite_pool.size() >= 8)
+            composite_pool.erase(std::remove_if(composite_pool.begin(), composite_pool.end(),
+                                                [](const auto &c) { return c.use_count() == 1; }),
+                                 composite_pool.end());
         gpu::Texture t = texture(w, h, format);
         if (!t)
             return nullptr;
@@ -525,6 +544,8 @@ struct Service : std::enable_shared_from_this<Service> {
         c->w = w;
         c->h = h;
         c->format = format;
+        if (composite_pool.size() < 8)
+            composite_pool.push_back(c);
         return c;
     }
     // Apply backpressure before the first write. Dropping an unrendered frame
@@ -706,6 +727,15 @@ struct Service : std::enable_shared_from_this<Service> {
                     return;
                 if (!last_id)
                     return;
+                // A repeat adds nothing until the display can show it. Under a
+                // FIFO swapchain the blocking acquire capped repeats at the
+                // refresh rate, but a mailbox swapchain acknowledges at once, so
+                // the worker re-presented the same image thousands of times a
+                // second and starved the guest of the mutex it seals frames
+                // under. Pace repeats to the refresh period whatever the mode.
+                if (!fake && !repeat_present_due(last_repeat_ts, ts, frame_period))
+                    return;
+                last_repeat_ts = ts;
                 f = std::make_shared<Frame>();
                 f->repeat = true;
                 f->frame_id = last_id;
@@ -1193,6 +1223,10 @@ extern "C" void host_present_stop() {
         s->history.overlay = {};
         s->cached.reset();
         s->cached_settings.reset();
+        {
+            std::lock_guard pool_lock(s->composite_pool_mutex);
+            s->composite_pool.clear();
+        }
         s->cached_input = {};
         s->cached_ui = {};
         s->targets = {};
@@ -1469,8 +1503,22 @@ extern "C" void host_frame_seal() {
     if (s->previous_ui_epoch != s->epoch ||
         (s->class_known && s->last_class != host_frame_class(f)))
         s->previous_ui = {};
+    // A classic front-end present (Blit/Flip) stages a complete image, and for
+    // a non-gameplay frame input.legacy is set to exactly that below. The
+    // compositor's legacy path draws only legacy_frame and never reads these UI
+    // elements, so ui_layer_extract's per-pixel replay/expand would be pure dead
+    // work - and it runs on the guest thread, which holds the scheduler baton,
+    // so burning it there also starves the audio pump (heard as stutter). Skip
+    // extraction when the frame will present as legacy.
+    bool staged;
+    {
+        std::lock_guard lock(s->mutex);
+        staged = s->writing && s->writing->staged_pixels;
+    }
+    const bool legacy_present = host_frame_class(f) != HOST_SCREEN_GAMEPLAY && staged;
     UiFrame ui{};
-    ui_layer_extract(f, s->guest_w, s->guest_h, &s->previous_ui, &ui);
+    if (!legacy_present)
+        ui_layer_extract(f, s->guest_w, s->guest_h, &s->previous_ui, &ui);
     s->previous_ui = ui;
     {
         std::lock_guard lock(s->mutex);

@@ -9249,6 +9249,28 @@ static void test_clock_spin_detection() {
     spin.slept(701);
     CHECK(!spin.observe(701, true)); // the count restarts after a sleep
 }
+// Repeats of an unchanged image are paced to the refresh period even when the
+// swapchain would accept them faster.
+static void test_repeat_present_pacing() {
+    const double period = 1.0 / 60;
+    CHECK(repeat_present_due(-1, 0, period)); // the first repeat is never held
+    CHECK(!repeat_present_due(1.0, 1.0, period));
+    CHECK(!repeat_present_due(1.0, 1.0 + period * 0.5, period));
+    CHECK(repeat_present_due(1.0, 1.0 + period * 0.95, period)); // timer jitter
+    CHECK(repeat_present_due(1.0, 1.0 + period, period));
+    // A worker spinning every 0.1 ms for one second repeats about once per
+    // refresh, not ten thousand times.
+    double last = -1;
+    int repeats = 0;
+    for (int i = 0; i < 10000; ++i) {
+        const double now = i * 0.0001;
+        if (repeat_present_due(last, now, period)) {
+            last = now;
+            ++repeats;
+        }
+    }
+    CHECK(repeats >= 60 && repeats <= 70);
+}
 static void test_wide_cursor_bound() {
     constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     constexpr uint32_t right = RECOMP_HOOK_MOUSE_DEVICE_RIGHT;
@@ -9847,6 +9869,7 @@ int main(int argc, char **argv) {
     test_fullscreen_edge_presentation();
     test_native_frame_metrics();
     test_clock_spin_detection();
+    test_repeat_present_pacing();
     test_wide_cursor_bound();
     test_pointer_reaches_scrolling_edges();
     test_native_overlay_pixels();
