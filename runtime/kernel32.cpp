@@ -411,7 +411,7 @@ static std::string resolve_in_game_dir(const std::vector<std::string> &norm, boo
             return next;
         return std::string();
     }
-    return host;
+    return os_path_is_within(g_game_dir.c_str(), host.c_str()) ? host : std::string();
 }
 
 std::string win32_host_path_op(const std::string &guest_path, int op) {
@@ -429,12 +429,9 @@ std::string win32_host_path_op(const std::string &guest_path, int op) {
         if (op != WIN32_FILE_READ && op != WIN32_FILE_LIST)
             return std::string();
     }
-    // A destination that does not exist yet is the normal case for both a
-    // rename and a create, so both permit a missing final component. Without
-    // this an unmodded MoveFileA or CopyFileA to a new filename fails, which
-    // is a behaviour change and not one this seam is allowed to make.
-    bool may_create = (op == WIN32_FILE_WRITE || op == WIN32_FILE_RENAME_DST);
-    return resolve_in_game_dir(norm, may_create);
+    if (op != WIN32_FILE_READ && op != WIN32_FILE_LIST)
+        return std::string(); // Mutations require a writable overlay.
+    return resolve_in_game_dir(norm, false);
 }
 
 extern "C" int recomp_writable_path(const char *guest_path, char *out, size_t out_len) {

@@ -90,6 +90,7 @@ def configure_module(cfg, key):
     global RESUMABLE_STACKS
     global UNTRANSLATED_RANGES
     UNTRANSLATED_RANGES = ()  # Executable address exclusions do not describe a DLL.
+    configure_guest_layout(cfg)
     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
     mods = {m["key"]: m for m in cfg.get("aux_modules", [])}
     if key not in mods:
@@ -131,6 +132,7 @@ def configure(cfg):
     global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
     global SYMBOL_PREFIX, AUX_MODULE
     SYMBOL_PREFIX, AUX_MODULE = "recomp_", None
+    configure_guest_layout(cfg)
     listings = str(cfg["listings_path"])
     LISTINGS = os.path.join(listings, "functions")
     FUNCS_TSV = os.path.join(listings, "functions.tsv")
@@ -159,6 +161,13 @@ def configure(cfg):
         else:
             value = int(r["value"]) & 0xFFFFFFFF
         DATA_SEEDS.append((int(r["addr"]), value))
+
+
+def configure_guest_layout(cfg):
+    """The shim range must agree with x86.h for expanded guest arenas."""
+    global GUEST_SHIM_BASE, GUEST_SHIM_END
+    GUEST_SHIM_END = cfg["game"].get("guest_size", game_config.GUEST_SIZE_DEFAULT)
+    GUEST_SHIM_BASE = GUEST_SHIM_END - 0x100000
 
 
 def visual_animation_read(addr, body):

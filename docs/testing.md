@@ -1,5 +1,15 @@
 # Testing
 
+`guest_memory_tests` and `guest_memory_2gb_tests` check readable arena edges
+and subprocess faults above the accessible range, including accesses across
+the highest 32-bit address. `null_guard_tests` checks all scalar accessors
+with debug guards disarmed and armed. `hardening_tests` checks mutation
+refusal without an overlay, profile confinement, canonical symlink escapes
+(when the host permits creating links), and absolute opt-in mod roots.
+`hardening_release_tests` verifies that disabled developer loaders ignore
+library environment switches. Web CSP/staging and macOS entitlement checks
+run in the portable tooling suite; node tests cover URL environment injection.
+
 `runtime_tests --mm-timers-only` runs without a game image and is registered
 as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
 event timers without a message loop, callback cancellation/replacement,

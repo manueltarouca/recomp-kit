@@ -20,6 +20,15 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_expanded_guest_layout(self):
+        self.assertEqual(game_config.validate_guest_size(0x80000000),0x80000000)
+        self.assertEqual(game_config.validate_heap_base(0x40000000,0x80000000),0x40000000)
+        for value in (True,0x10001000,0x100000000,0x0fff0000,"0x80000000"):
+            with self.assertRaisesRegex(ValueError,"guest_size"):
+                game_config.validate_guest_size(value)
+        with self.assertRaisesRegex(ValueError,"heap_base"):
+            game_config.validate_heap_base(0x7e000000,0x80000000)
+
     def test_untranslated_ranges(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

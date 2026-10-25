@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Reserve the native 32-bit guest address range with an inaccessible upper
+  guard and derive runtime regions from the configured arena size. Enable
+  optional null-page faults in Debug builds, gate environment-selected native
+  libraries behind an explicit developer build option, and require an overlay
+  for guest writes. Canonical paths stay within their configured roots; user
+  mods require an absolute opt-in path. Web pages enforce a strict CSP and an
+  empty-by-default environment-switch allowlist. macOS app signing enables the
+  hardened runtime; tooling and fetched native dependencies use hashed pins.
+  Fixes #34.
+
 - Keep detached and undisassembled switch cases in their owning function,
   including cases beyond 64 KB within its listed extent. Follow guarded EBP
   locals, reject bounds bypassed by branches, recover pointer-named methods

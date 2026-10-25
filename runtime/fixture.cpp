@@ -725,6 +725,7 @@ int main(int argc, char **argv) {
     // This binary has its own main and never calls boot.cpp, so nothing else
     // would load them. RECOMP_NO_MODS=1 - what Gate A sets - skips it entirely,
     // which is how this stays byte-identical to the pre-foundation fixture.
+    mods_overlay_reset();
     if (!recomp_env("NO_MODS")) {
         mods_host_set_main_thread();
         // This thread IS the run thread: it drives translated code directly and

@@ -2,9 +2,10 @@
 #pragma once
 #include "guest.h"
 
-// Maps (or re-maps) the 256 MB guest arena at g_mem, zero filled, and resets
+// Maps (or re-maps) the configured guest arena at g_mem, zero filled, and resets
 // the heap free list. Safe to call repeatedly; each call discards all guest
-// state. Aborts on failure.
+// state. Native platforms reserve the entire 32-bit range plus a 64 KB upper
+// guard; only GUEST_SIZE bytes are accessible. Aborts on failure.
 void mem_init();
 void mem_shutdown();
 

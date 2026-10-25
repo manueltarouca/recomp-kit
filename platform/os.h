@@ -38,6 +38,10 @@ OsThreadId os_thread_id_of(const OsThread *t);
 // ---------------------------------------------------------------------------
 void *os_vm_reserve(size_t bytes); // NULL on failure
 void os_vm_release(void *p, size_t bytes);
+// Native guest arena: reserve 4 GiB + 64 KiB, exposing only `bytes`.
+// wasm32 cannot reserve that address range and retains a plain arena.
+void *os_guest_arena_reserve(size_t bytes);
+void os_guest_arena_release(void *p, size_t bytes);
 
 // ---------------------------------------------------------------------------
 // Plugins.
@@ -65,6 +69,12 @@ int os_unlink(const char *path);
 int os_rmdir(const char *path);       // the directory must be empty
 int os_getcwd(char *buf, size_t cap); // 0 or -1
 int os_chdir(const char *path);
+// Resolve existing paths through symbolic links/junctions. UTF-8, slash
+// separators, no trailing separator except a filesystem root; 0 or -1.
+int os_realpath(const char *path, char *out, size_t cap);
+int os_path_is_absolute(const char *path);
+// Both paths must exist. Compare canonical paths with the host's case rules.
+int os_path_is_within(const char *root, const char *path);
 // Calls `fn` for every entry except "." and "..", in directory order. A
 // nonzero return from `fn` stops the walk. -1 when the directory cannot be
 // opened, 0 otherwise.
@@ -160,6 +170,15 @@ int os_unsetenv(const char *name);
 // The kit's switches: `recomp_env("PIN_CLOCK")` reads RECOMP_PIN_CLOCK.  The
 // prefix names the kit, never a game; a switch is unset when NULL.
 const char *recomp_env(const char *name);
+// Arbitrary native-library loading is an explicit developer build feature.
+static inline const char *recomp_dev_env(const char *name) {
+#if defined(RECOMP_DEV_LOADERS) && RECOMP_DEV_LOADERS
+    return recomp_env(name);
+#else
+    (void)name;
+    return NULL;
+#endif
+}
 // Switches from a file, for a platform with no shell to set them in (the iPad
 // app reads Documents/switches.txt at start). One NAME=VALUE per line, spaces
 // around either trimmed; blank lines, # comments and lines without '=' are

@@ -24,6 +24,14 @@ remain 32-bit offsets even in a 64-bit process. `loader.cpp` maps PE sections,
 zero-fills data tails and replaces import-table entries with runtime trampolines.
 `imports.cpp` decodes calls and dispatches the original calling conventions.
 
+Native platforms reserve the full 4 GiB address range plus a 64 KiB upper
+guard, exposing only `[game] guest_size` bytes. Sizes are 64 KiB aligned,
+between 256 MiB and 0xffff0000. The heap ceiling, stack, TEB, shims, callback
+sentinel and mod heap derive from that size; mod allocations stop below the
+eight-megabyte guest stack. Debug builds compile low-page checks into memory
+helpers; `RECOMP_NULL_FAULTS=1` arms the guest access violation. wasm32 retains
+a plain allocation because it cannot reserve the full native address range.
+
 `runtime/x86.h` defines the register file, flags, x87 state and
 instruction helpers used by generated functions. Functions retain stable guest
 addresses for dispatch, hooks and diagnostics. Those addresses are identifiers,
@@ -31,13 +39,29 @@ not host pointers and not evidence of human-recovered intent.
 
 A game that ships part of its code as a DLL can name it in game.toml as an
 auxiliary module (`[modules.aux.<key>]`). The loader maps it beside the image
-at its preferred base, above the shim trampolines, so `[game] guest_size`
-grows the arena to hold it. The translator turns the module into its own
+at a configured, validated load base below the heap. `[game] guest_size`
+can grow the arena while moving its runtime regions together. The translator turns the module into its own
 generated library with prefixed tables that register with the runtime at
 start-up; `recomp_call` and `recomp_jump` consult that registry after the
 image's own table misses, so calls in either direction cross the boundary
 without a special case. `LoadLibrary` of the module's name returns its base
 and `GetProcAddress` reads its export directory, which is all the game sees.
+
+Guest mutations require the profile overlay, which boot installs even when
+mods are disabled. Without it, all create/write/delete/rename requests fail.
+Reads from an installation or overlay layer must resolve canonically within
+that root, rejecting symlinks or junctions that escape it. Profile mutations
+also reject symlink components. User mods have no default root:
+`RECOMP_MODS_DIR` must explicitly name an absolute path. Core resource mods
+retain their packaged location.
+
+Environment-selected host code (`RECOMP_EXTRA_CODE`, `RECOMP_VULKAN_LIBRARY`)
+is available only in a build configured with `-DRECOMP_DEV_LOADERS=ON`; the
+default is OFF. macOS packages use hardened-runtime signing with only the
+`disable-library-validation` entitlement for replaceable media libraries.
+The web launcher and player load scripts/styles from files under a strict
+same-origin CSP. URL environment switches use an exact allowlist, empty by
+default (`web/player/env.mjs`), preserving the assigned profile path.
 
 ## Threads and ownership
 

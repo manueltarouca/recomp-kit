@@ -50,10 +50,10 @@ extern uint8_t *g_mem;
  *   0x00400000 + SizeOfImage  image (preferred base, no relocation).  The end
  *                             is a PE header value, not a constant; ask the
  *                             loader (loader_image_limit()) for it.
- *   GUEST_HEAP_BASE..0x0e000000  heap arena (default 0x01000000)
- *   0x0f000000                stack top, grows down (1 MB)
- *   0x0fe00000                TEB (FS base)
- *   0x0ff00000 + 16*i         import shim trampoline for import i
+ *   GUEST_HEAP_BASE..GUEST_HEAP_END  heap arena (default 0x01000000)
+ *   GUEST_STACK_TOP            stack top, grows down (8 MB)
+ *   GUEST_TEB_BASE             TEB (FS base)
+ *   GUEST_SHIM_BASE + 16*i     import shim trampoline for import i
  */
 /* The build passes the game's image base; this default serves the test harness. */
 #ifndef GUEST_IMAGE_BASE
@@ -64,13 +64,14 @@ extern uint8_t *g_mem;
 #ifndef GUEST_HEAP_BASE
 #define GUEST_HEAP_BASE 0x01000000u
 #endif
-#define GUEST_HEAP_END 0x0e000000u
-#define GUEST_STACK_TOP 0x0f000000u
-#define GUEST_TEB_BASE 0x0fe00000u
-#define GUEST_SHIM_BASE 0x0ff00000u
-#define GUEST_SHIM_END 0x10000000u
+#define GUEST_HEAP_END (GUEST_SIZE - 0x02000000u)
+#define GUEST_STACK_TOP (GUEST_SIZE - 0x01000000u)
+#define GUEST_STACK_SIZE 0x00800000u
+#define GUEST_TEB_BASE (GUEST_SIZE - 0x00200000u)
+#define GUEST_SHIM_BASE (GUEST_SIZE - 0x00100000u)
+#define GUEST_SHIM_END GUEST_SIZE
 #define GUEST_SHIM_STRIDE 16u
-#define GUEST_RETURN_SENTINEL 0x0fdfff00u
+#define GUEST_RETURN_SENTINEL (GUEST_TEB_BASE - 0x100u)
 /* Windows maps nothing in the first 64 KB, so a read or a write through a
  * null pointer faults and the program's own handlers see it. A flat arena
  * hands back a zero instead, which turns a null dereference into ordinary
@@ -121,6 +122,7 @@ RECOMP_HOT_INLINE uint32_t rd32(uint32_t a) {
     return v;
 }
 RECOMP_HOT_INLINE uint64_t rd64(uint32_t a) {
+    RECOMP_NULL_GUARD(a, 0);
     uint64_t v;
     memcpy(&v, g_mem + a, 8);
     return v;
@@ -184,25 +186,30 @@ RECOMP_HOT_INLINE void wr32(uint32_t a, uint32_t v) {
     recomp_watch(a, 4, v);
 }
 RECOMP_HOT_INLINE void wr64(uint32_t a, uint64_t v) {
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 8);
     recomp_watch(a, 8, v);
 }
 RECOMP_HOT_INLINE float rdf32(uint32_t a) {
+    RECOMP_NULL_GUARD(a, 0);
     float v;
     memcpy(&v, g_mem + a, 4);
     return v;
 }
 RECOMP_HOT_INLINE double rdf64(uint32_t a) {
+    RECOMP_NULL_GUARD(a, 0);
     double v;
     memcpy(&v, g_mem + a, 8);
     return v;
 }
 RECOMP_HOT_INLINE void wrf32(uint32_t a, float v) {
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 4);
     if (g_dirty_count != 0)
         recomp_dirty(a, 4);
 }
 RECOMP_HOT_INLINE void wrf64(uint32_t a, double v) {
+    RECOMP_NULL_GUARD(a, 1);
     memcpy(g_mem + a, &v, 8);
     if (g_dirty_count != 0)
         recomp_dirty(a, 8);
@@ -252,6 +259,7 @@ static inline void wrf80(uint32_t a, double v) {
  * to nearest even as the default control word does. Out-of-range values store
  * the BCD indefinite (0xffff c000 0000 0000 0000), as the hardware does. */
 static inline void wrbcd80(uint32_t a, double v) {
+    RECOMP_NULL_GUARD(a, 1);
     uint8_t out[10];
     memset(out, 0, sizeof out);
     double r = nearbyint(v);

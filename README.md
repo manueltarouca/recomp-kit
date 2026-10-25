@@ -58,7 +58,7 @@ translation, and your own copy of the game:
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install -r kit/requirements-dev.txt
+.venv/bin/python -m pip install --require-hashes --only-binary=:all: -r kit/requirements.lock
 .venv/bin/python tools/setup.py --install /path/to/the/installed/game --ghidra-home /path/to/ghidra
 .venv/bin/python tools/build.py --regenerate
 open build/<AppName>.app

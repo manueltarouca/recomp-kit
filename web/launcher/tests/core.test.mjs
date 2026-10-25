@@ -1,6 +1,7 @@
 // node --test web/launcher/tests - the web launcher's import rules.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { queryEnvironment, executablePath } from "../../player/env.mjs";
 import { createHash } from "node:crypto";
 import {
   wildcardMatch, excluded, planImport, sha256Hex, Sha256, crc32, ZipReader, zipWrite,
@@ -8,6 +9,15 @@ import {
 } from "../core.js";
 
 const enc = new TextEncoder();
+
+test("player URLs cannot inject runtime environment switches", () => {
+  const query = "?RECOMP_PROFILE_DIR=/game&RECOMP_EXTRA_CODE=evil&RECOMP_VULKAN_LIBRARY=evil&RECOMP_LOG=2";
+  assert.deepEqual(Object.entries(queryEnvironment(query)), []);
+  assert.deepEqual(Object.entries(queryEnvironment(query, ["RECOMP_LOG"])), [["RECOMP_LOG", "2"]]);
+  assert.deepEqual(Object.entries(queryEnvironment("?RECOMP_LOG_SUFFIX=3", ["RECOMP_LOG"])), []);
+  assert.equal(executablePath({ executable: "GAME.EXE" }), "GAME.EXE");
+  assert.equal(executablePath({ exeDir: "Binaries/Win32", executable: "GAME.EXE" }), "Binaries/Win32/GAME.EXE");
+});
 const EXE = enc.encode("MZ fake game executable\n");
 const game = {
   id: "test", title: "Test Game", executable: "GAME.EXE",

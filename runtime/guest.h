@@ -35,7 +35,7 @@ static const uint32_t STACK_TOP = GUEST_STACK_TOP; // initial ESP region top, gr
 // natively, and why is not yet established. Until it is, the guest gets
 // headroom rather than the program's own reserve. The region below the stack
 // down to GUEST_HEAP_END is otherwise unused.
-static const uint32_t STACK_SIZE = 0x00800000u;
+static const uint32_t STACK_SIZE = GUEST_STACK_SIZE;
 static const uint32_t STACK_LIMIT = STACK_TOP - STACK_SIZE;
 static const uint32_t TEB_BASE = GUEST_TEB_BASE; // FS segment base
 static const uint32_t TEB_SIZE = 0x1000u;
