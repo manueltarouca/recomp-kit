@@ -20,6 +20,25 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_executable_subdirectory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text(encoding="utf-8")
+            # The stub's EXE spelling can change without weakening this layout test.
+            lines = stub.splitlines()
+            lines = ['developer_exe = "original/Binaries/GAME.EXE"' if l.startswith('developer_exe =') else l for l in lines]
+            base = "\n".join(lines).replace("[game]\n", '[game]\nexe_dir = "Binaries"\n')
+            (game / "globals.toml").write_text("", encoding="utf-8")
+            (game / "game.toml").write_text(base, encoding="utf-8")
+            cfg = game_config.load(game)
+            self.assertEqual(cfg["developer_game_dir_path"], (game / "original").resolve())
+            self.assertIn('#define RECOMP_EXE_DIR "Binaries"', gen_game_config.render_header(cfg))
+            self.assertIn((game / "original").resolve().as_posix(), gen_game_config.render_cmake(cfg))
+            for bad in ('"../Binaries"', '"C:/Binaries"', '"/Binaries"', '"."', '"Bin//x"', 'true', '"Other"'):
+                (game / "game.toml").write_text(base.replace('exe_dir = "Binaries"', 'exe_dir = ' + bad), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "exe_dir"):
+                    game_config.load(game)
+
     def test_hardware_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

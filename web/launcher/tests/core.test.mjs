@@ -58,6 +58,25 @@ const install = (prefix = "") => ({
   [prefix + "readme.txt"]: enc.encode("keep"),
 });
 
+test("nested executable keeps sibling data in the imported root", async () => {
+  const nested = { ...game, exeDir: "Binaries/Win32" };
+  for (const prefix of ["", "Install/"]) {
+    const src = memorySource({
+      [prefix + "BINARIES/win32/game.exe"]: EXE,
+      [prefix + "DATA/sprites.bin"]: enc.encode("asset"),
+      [prefix + "levels/one.lvl"]: enc.encode("level"),
+    });
+    const plan = planImport(nested, await src.list());
+    assert.equal(plan.base, prefix.replace(/\/$/, ""));
+    assert.equal(plan.exe, "BINARIES/win32/game.exe");
+    assert.deepEqual(plan.missing, []);
+    const store = new MemoryStore();
+    assert.equal((await importGame(nested, src, store)).result, "done");
+    assert.equal((await gameStatus(nested, store)).state, "ready");
+    assert.equal(await store.readText("DATA/sprites.bin"), "asset");
+  }
+});
+
 test("wildcards and exclusion", () => {
   assert.ok(wildcardMatch("*.dll", "BINKW32.DLL"));
   assert.ok(wildcardMatch("Setup?.txt", "setup1.TXT"));

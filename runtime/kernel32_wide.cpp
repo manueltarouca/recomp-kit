@@ -78,7 +78,10 @@ void k_GetFullPathNameW(X86 *c) {
     if (pfile) {
         size_t slash = full.find_last_of('\\');
         wr32(pfile,
-             buf + (slash == std::string::npos ? 0 : 2 * wide_units(full.substr(0, slash + 1))));
+             !full.empty() && full.back() == '\\'
+                 ? 0
+                 : buf + (slash == std::string::npos ? 0
+                                                     : 2 * wide_units(full.substr(0, slash + 1))));
     }
     set_eax(c, n);
 }

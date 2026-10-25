@@ -153,6 +153,13 @@ def load(game_dir):
         raise ValueError("%s: missing [game] keys: %s" % (source, ", ".join(missing)))
     game["heap_base"] = validate_heap_base(int(game.get("heap_base", HEAP_BASE_DEFAULT)))
     windows_version(game.setdefault("windows_version", "4.10"))
+    exe_dir = game.setdefault("exe_dir", "")
+    if (not isinstance(exe_dir, str) or (exe_dir and
+            (exe_dir.startswith(("/", "\\")) or ":" in exe_dir or
+             any(c in ("", ".", "..") for c in exe_dir.replace("\\", "/").split("/"))
+             or any(ord(c) < 32 for c in exe_dir)))):
+        raise ValueError('%s: [game] exe_dir must be a relative directory inside the game root' % source)
+    game["exe_dir"] = exe_dir.replace("\\", "/")
     system = cfg.setdefault("system", {})
     if system.setdefault("mm_timers", "message_loop") not in ("message_loop", "thread"):
         raise ValueError('%s: [system] mm_timers must be "message_loop" or "thread"' % source)
@@ -234,6 +241,12 @@ def load(game_dir):
     # Developer inputs live beside game.toml: a game repository holds its own
     # ignored original/ and analysis/ directories.
     cfg["developer_exe_path"] = (game_dir / game["developer_exe"]).resolve()
+    developer_root = cfg["developer_exe_path"].parent
+    for component in reversed(game["exe_dir"].split("/")) if game["exe_dir"] else ():
+        if developer_root.name.casefold() != component.casefold():
+            raise ValueError('%s: [game] developer_exe must sit inside exe_dir' % source)
+        developer_root = developer_root.parent
+    cfg["developer_game_dir_path"] = developer_root
     cfg["listings_path"] = (game_dir / translate.get("listings", "analysis")).resolve()
     # [translate] overrides: a header the generated sources include before they
     # define FN_<addr>, so a game can replace one translated function with a

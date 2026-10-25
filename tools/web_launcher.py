@@ -33,6 +33,7 @@ def game_entry(cfg):
         "id": game["id"],
         "title": launcher["title"],
         "executable": game["executable"],
+        "exeDir": game["exe_dir"],
         "sha256": game["sha256"],
         "requiredDirs": cfg["setup"]["required_dirs"],
         "exclude": cfg["bundle"]["exclude"],

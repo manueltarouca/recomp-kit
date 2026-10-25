@@ -91,6 +91,18 @@ guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choic
 
 ## Discovery, and code a build does not carry
 
+A port whose executable sits below its data root sets `[game] exe_dir`, for
+example `"Binaries"` or `"Binaries/Win32"`. It must be relative, with no dot
+or parent components, and `developer_exe` must sit in that directory.
+Setup links and launcher imports keep the installation root above it.
+The runtime receives the EXE's host folder and strips only a complete,
+case-insensitive configured suffix, ignoring trailing separators. If it
+does not match, both root and EXE paths use the legacy layout. The guest's
+initial current directory is its EXE folder, so `..` reaches sibling data;
+module filenames, command line and PATH use that folder. PATH then includes
+the data root. Full paths normalize dot/parent components without climbing
+above a drive root; a trailing separator has no filename component.
+
 Hardware probes use `[system] desktop = "1024x768"` and `memory_mb = 512`
 by default. The desktop is shared by USER32, GDI and D3D9 until a selected
 display mode takes over. `[d3d9.adapter]` accepts `vendor_id`, `device_id`,

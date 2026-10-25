@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Support `[game] exe_dir = "Binaries"` (including nested folders). Runtime
+  paths and DLL names retain the executable's folder while game data,
+  launcher imports, setup links and mobile/web staging use the enclosing
+  installation root. Normalize `.`/`..` in Windows full paths and current
+  directories; mismatched installs retain the legacy layout. Fixes #35.
+
 - Let ports configure desktop size and physical memory in `[system]`, and
   GPU identity/video memory in `[d3d9.adapter]`. Direct3D 9 lists 17 display
   modes and rejects invalid enumeration indices. USER32, GDI and D3D9

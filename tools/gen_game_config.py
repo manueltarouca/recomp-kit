@@ -15,7 +15,8 @@ import game_config  # noqa: E402
 
 STRINGS = (("id", "RECOMP_GAME_ID"), ("name", "RECOMP_GAME_NAME"), ("app_name", "RECOMP_APP_NAME"),
            ("bundle_id", "RECOMP_BUNDLE_ID"), ("executable", "RECOMP_EXECUTABLE"),
-           ("sha256", "RECOMP_EXE_SHA256"), ("guest_root", "RECOMP_GUEST_ROOT"))
+           ("sha256", "RECOMP_EXE_SHA256"), ("guest_root", "RECOMP_GUEST_ROOT"),
+           ("exe_dir", "RECOMP_EXE_DIR"))
 ADDRESSES = (("image_base", "RECOMP_IMAGE_BASE"), ("entry_point", "RECOMP_ENTRY_POINT"),
              ("heap_base", "RECOMP_HEAP_BASE"))
 
@@ -46,7 +47,7 @@ def render_header(cfg):
         lines.append("#define RECOMP_WINDOWS_%s %du" % (field, value))
     # Absolute: the developer's game lives beside game.toml, not under the kit.
     lines.append("#define RECOMP_DEVELOPER_EXE %s" % c_string(cfg["developer_exe_path"].as_posix()))
-    lines.append("#define RECOMP_DEVELOPER_GAME_DIR %s" % c_string(cfg["developer_exe_path"].parent.as_posix()))
+    lines.append("#define RECOMP_DEVELOPER_GAME_DIR %s" % c_string(cfg["developer_game_dir_path"].as_posix()))
     lines.append("#define RECOMP_GAME_DIR %s" % c_string(Path(cfg["dir"]).resolve().as_posix()))
     lines.append("#define RECOMP_KIT_DIR %s" % c_string(Path(__file__).resolve().parents[1].as_posix()))
     # The on-screen controls a fresh profile starts with, and how the pad maps
@@ -131,7 +132,7 @@ def render_cmake(cfg):
     lines.append('set(RECOMP_OVERRIDE_HEADER "%s")'
                  % (cfg["overrides_header"].as_posix() if cfg.get("overrides_header") else ""))
     lines.append("set(RECOMP_AUX_MODULES %s)" % ";".join(m["key"] for m in cfg["aux_modules"]))
-    lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % cfg["developer_exe_path"].parent.as_posix())
+    lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % cfg["developer_game_dir_path"].as_posix())
     lines.append('set(RECOMP_DEVELOPER_EXE "%s")' % cfg["developer_exe_path"].as_posix())
     # [translate] native: C replacements for hot functions, compiled with the
     # translation. The header #defines FN_<addr> to each replacement (see the

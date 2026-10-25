@@ -22,6 +22,15 @@ target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx_null 1)
 
 if(NOT IOS AND NOT ANDROID)
+add_executable(guest_layout_tests tests/guest_layout_tests.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(guest_layout_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(guest_layout_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(guest_layout_tests 1)
+pop_test_binary(guest_layout_tests)
+add_test(NAME guest_layout_tests COMMAND guest_layout_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(guest_layout_tests PROPERTIES LABELS nogame)
+
 add_executable(hardware_tests tests/hardware_tests.cpp
   ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
 target_link_libraries(hardware_tests PRIVATE recomp_platform recomp_dx recomp_runtime)

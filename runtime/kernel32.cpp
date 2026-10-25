@@ -1,6 +1,7 @@
 #include "seh.h"
 #include "profile.h"
 #include "game_config.h"
+#include "guest_layout.h"
 // kernel32.cpp - KERNEL32 shims: heap, files, modules, TLS, sync objects,
 // time and the string/locale helpers the CRT startup calls.
 //
@@ -66,6 +67,7 @@ namespace {
 std::string g_game_dir =
     std::string(RECOMP_DEVELOPER_EXE).substr(0, std::string(RECOMP_DEVELOPER_EXE).rfind('/'));
 std::string g_cur_dir = RECOMP_GUEST_ROOT;
+static std::string g_guest_exe_dir = RECOMP_GUEST_ROOT;
 uint32_t g_last_error = 0;
 jmp_buf g_exit_jmp;
 bool g_exit_jmp_valid = false;
@@ -539,10 +541,22 @@ uint32_t loader_tls_block_for_thread(uint32_t tls_array) {
 }
 
 void win32_init(const std::string &game_dir) {
+    win32_init_layout(game_dir, RECOMP_EXE_DIR);
+}
+void win32_init_layout(const std::string &game_dir, const std::string &exe_dir) {
     host_reset_mm_timers();
     kernel32_wide_reset();
-    g_game_dir = game_dir.empty() ? std::string(".") : game_dir;
-    g_cur_dir = RECOMP_GUEST_ROOT;
+    const bool matches =
+        guest_layout::root_from_exe(game_dir.empty() ? "." : game_dir, exe_dir, &g_game_dir);
+    if (g_game_dir.empty())
+        g_game_dir = ".";
+    g_guest_exe_dir = RECOMP_GUEST_ROOT;
+    if (matches && !exe_dir.empty()) {
+        std::string suffix = guest_layout::slashes(exe_dir);
+        std::replace(suffix.begin(), suffix.end(), '/', '\\');
+        g_guest_exe_dir += "\\" + suffix;
+    }
+    g_cur_dir = g_guest_exe_dir;
     g_last_error = 0;
     g_exited = false;
     g_exit_code = 0;
@@ -1016,11 +1030,13 @@ void k_GetFullPathNameA(X86 *c) {
     std::string name = gm_str(arg(c, 0));
     uint32_t len = arg(c, 1), buf = arg(c, 2), pfile = arg(c, 3);
     std::string full = full_path_named(name);
-    if (buf && len) {
+    if (buf && len > full.size()) {
         uint32_t n = gm_put_str(buf, full.c_str(), len);
         if (pfile) {
             size_t s = full.find_last_of('\\');
-            wr32(pfile, s == std::string::npos ? buf : buf + (uint32_t)s + 1);
+            wr32(pfile, !full.empty() && full.back() == '\\' ? 0
+                        : s == std::string::npos             ? buf
+                                                             : buf + (uint32_t)s + 1);
         }
         set_eax(c, n);
     } else {
@@ -1040,27 +1056,25 @@ void k_GetCurrentDirectoryA(X86 *c) {
 void k_SetCurrentDirectoryA(X86 *c) {
     std::string want = gm_str(arg(c, 0));
     std::string host = win32_host_path(want);
-    if (host.empty()) {
+    OsStat st{};
+    if (host.empty() || os_stat(host.c_str(), &st) != 0 || !st.is_dir) {
         set_last_error(ERROR_PATH_NOT_FOUND_);
         set_eax(c, 0);
         return;
     }
-    if (want.size() >= 2 && want[1] == ':')
-        g_cur_dir = want;
-    else if (!want.empty() && (want[0] == '\\' || want[0] == '/'))
-        g_cur_dir = "C:" + want;
-    else
-        g_cur_dir = g_cur_dir + "\\" + want;
+    g_cur_dir = full_path_named(want);
+    while (g_cur_dir.size() > 3 && g_cur_dir.back() == '\\')
+        g_cur_dir.pop_back();
     set_eax(c, 1);
 }
 
 // Both encodings expose the same guest path, never a host filesystem path.
 std::string module_file_name(uint32_t hmod) {
-    std::string path = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
+    std::string path = g_guest_exe_dir + "\\" RECOMP_EXECUTABLE;
     if (hmod && hmod != IMAGE_BASE) {
         for (const auto &kv : modules())
             if (kv.second == hmod) {
-                path = RECOMP_GUEST_ROOT "\\" + kv.first;
+                path = g_guest_exe_dir + "\\" + kv.first;
                 break;
             }
     }
@@ -1312,18 +1326,23 @@ namespace {
 
 // The environment block is a run of NUL-terminated strings ended by an extra
 // NUL. GetEnvironmentStringsW must hand back UTF-16, not the ANSI bytes.
-static const char *const k_environment[] = {"PATH=" RECOMP_GUEST_ROOT, "windir=C:\\WINDOWS",
-                                            nullptr};
+static std::vector<std::string> environment() {
+    return {"PATH=" + g_guest_exe_dir +
+                (g_guest_exe_dir == RECOMP_GUEST_ROOT ? "" : ";" RECOMP_GUEST_ROOT),
+            "windir=C:\\WINDOWS"};
+}
 
 void k_GetEnvironmentStrings(X86 *c) {
     if (!g_envblock_addr || !heap_owns(g_envblock_addr)) {
         uint32_t bytes = 1;
-        for (int i = 0; k_environment[i]; ++i)
-            bytes += (uint32_t)strlen(k_environment[i]) + 1;
+        const auto values = environment();
+        for (const auto &value : values)
+            bytes += uint32_t(value.size()) + 1;
         uint32_t a = heap_alloc(bytes, true);
         uint32_t at = a;
-        for (int i = 0; a && k_environment[i]; ++i)
-            at += gm_put_str(at, k_environment[i], 0x1000) + 1;
+        if (a)
+            for (const auto &value : values)
+                at += gm_put_str(at, value.c_str(), uint32_t(value.size()) + 1) + 1;
         g_envblock_addr = a;
     }
     set_eax(c, g_envblock_addr);
@@ -1332,19 +1351,21 @@ void k_GetEnvironmentStrings(X86 *c) {
 void k_GetEnvironmentStringsW(X86 *c) {
     if (!g_envblockw_addr || !heap_owns(g_envblockw_addr)) {
         uint32_t chars = 1;
-        for (int i = 0; k_environment[i]; ++i)
-            chars += (uint32_t)strlen(k_environment[i]) + 1;
+        const auto values = environment();
+        for (const auto &value : values)
+            chars += uint32_t(value.size()) + 1;
         uint32_t a = heap_alloc(chars * 2, true);
         uint32_t at = a;
-        for (int i = 0; a && k_environment[i]; ++i) {
-            const char *s = k_environment[i];
-            for (uint32_t j = 0; s[j]; ++j) {
-                wr16(at, (uint16_t)(uint8_t)s[j]);
+        if (a)
+            for (const auto &value : values) {
+                const char *s = value.c_str();
+                for (uint32_t j = 0; s[j]; ++j) {
+                    wr16(at, (uint16_t)(uint8_t)s[j]);
+                    at += 2;
+                }
+                wr16(at, 0);
                 at += 2;
             }
-            wr16(at, 0);
-            at += 2;
-        }
         g_envblockw_addr = a;
     }
     set_eax(c, g_envblockw_addr);
@@ -3943,6 +3964,18 @@ const char *locale_info(uint32_t lctype) {
 // before main: nothing is set, and the answer is the one en-US machine every
 // game of the era saw.
 void k_GetEnvironmentVariableA(X86 *c) {
+    const std::string name = lower(gm_str(arg(c, 0)));
+    for (const auto &entry : environment()) {
+        const size_t equals = entry.find('=');
+        if (lower(entry.substr(0, equals)) == name) {
+            const std::string value = entry.substr(equals + 1);
+            const uint32_t capacity = arg(c, 2);
+            set_eax(c, !arg(c, 1) || capacity <= value.size()
+                           ? uint32_t(value.size()) + 1
+                           : gm_put_str(arg(c, 1), value.c_str(), capacity));
+            return;
+        }
+    }
     set_last_error(203); // ERROR_ENVVAR_NOT_FOUND
     set_eax(c, 0);
 }
@@ -4490,6 +4523,27 @@ std::string full_path_named(const std::string &name) {
         full = "C:" + name;
     else
         full = g_cur_dir + "\\" + name;
+    std::replace(full.begin(), full.end(), '/', '\\');
+    const bool trailing = !full.empty() && full.back() == '\\';
+    const std::string drive = full.size() >= 2 && full[1] == ':' ? full.substr(0, 2) : "C:";
+    std::vector<std::string> components;
+    for (const auto &part : split_path(full.substr(2))) {
+        if (part == ".")
+            continue;
+        if (part == "..") {
+            if (!components.empty())
+                components.pop_back();
+        } else
+            components.push_back(part);
+    }
+    full = drive + "\\";
+    for (const auto &part : components) {
+        if (full.back() != '\\')
+            full += '\\';
+        full += part;
+    }
+    if (trailing && full.back() != '\\')
+        full += '\\';
     return full;
 }
 
@@ -4637,7 +4691,7 @@ void open_mutex_named(X86 *c, const std::string &name) {
 
 void get_command_line(X86 *c) {
     if (!g_cmdline_addr) {
-        std::string line = RECOMP_GUEST_ROOT "\\" RECOMP_EXECUTABLE;
+        std::string line = module_file_name(0);
         if (const char *extra = recomp_env("GUEST_ARGS"); extra && *extra)
             line += std::string(" ") + extra;
         g_cmdline_addr = guest_strdup(line.c_str());

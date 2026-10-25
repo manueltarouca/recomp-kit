@@ -34,6 +34,10 @@ void win32_forget_scrollbars(uint32_t hwnd);
 // directory that backs the guest root RECOMP_GUEST_ROOT (the directory holding the
 // loaded EXE).
 void win32_init(const std::string &game_dir);
+// Explicit layout for hosts/tests that select an installation at runtime.
+// The first argument is the loaded EXE's host directory; a suffix mismatch
+// falls back to the legacy root-at-EXE layout.
+void win32_init_layout(const std::string &exe_folder, const std::string &exe_dir);
 const std::string &win32_game_dir();
 // Guest spelling shared by shell folder APIs; creation uses the write overlay.
 std::string shell_folder_guest_path(uint32_t csidl, bool create);

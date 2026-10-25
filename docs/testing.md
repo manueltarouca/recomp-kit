@@ -5,6 +5,12 @@ as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
 event timers without a message loop, callback cancellation/replacement,
 worker exit/restart, periodic cadence, pinned time and shutdown.
 
+`hardware_tests` checks configured desktop, display enumeration, adapter
+identity and memory through the guest API. `guest_layout_tests` checks
+both root/nested EXE layouts, the suffix-mismatch fallback, DLL/command-line/
+environment paths and ANSI/wide full-path normalization. Both run without
+a game image under `nogame`; launcher tests also import a nested EXE install.
+
 `d3d9_raster_tests` checks CPU pixels for integer sample centres, shared
 triangle edges, viewport clipping, depth formats/comparisons/clears, alpha
 comparisons, blend operations/factors, color masks and texture addressing.
