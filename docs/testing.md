@@ -1,5 +1,18 @@
 # Testing
 
+`openal_tests` captures mixer calls and advances the guest clock to check
+source progress, processed queues, shared-context buffer lifetimes, stable
+pitch/pan, all six distance models, format/rate refusal, null upload bounds,
+multichannel folding and device cleanup. Bink tests in `dx_tests` cover the
+legacy/SDK records, registered Y/cR/cB planes, seek back to frame one and
+full summary/realtime guards with `RECOMP_TEST_BINK_CONTAINER=host-path,offset`.
+Use a colored fixture to establish sensitivity to swapped chroma planes.
+`RECOMP_TEST_BINK_MEMORY=host-path` additionally checks a real Bink movie
+through the guest-memory window; that optional media file stays outside Git.
+The binary's `RECOMP_TEST_AUDIO` mode exits after its decoder check, so run it
+separately from the Bink suite. CI generates an AVI fixture and Ogg tone for
+these separate runs. [Audio compatibility](audio-compat.md) lists limitations.
+
 `crt_tests` exercises the VC8 imports through guest ABI calls: allocation and
 overflow refusal, sort callbacks, UTF-16 strings, integer and floating-point
 conversions, x87/MXCSR control, printf/scanf and legacy NaNs, secure truncation,

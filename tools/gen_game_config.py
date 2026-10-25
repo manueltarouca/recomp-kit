@@ -56,6 +56,7 @@ def render_header(cfg):
     lines.append("#define RECOMP_CONTROLS_DEFAULT_LAYOUT %s" % c_string(controls["default_layout"]))
     lines.append("#define RECOMP_CONTROLS_PAD %d" % ("off", "mapped", "native").index(controls["pad"]))
     lines.append("#define RECOMP_MM_TIMER_THREAD %d" % (cfg["system"]["mm_timers"] == "thread"))
+    lines.append("#define RECOMP_BINK_SDK_RECORD %d" % (cfg["bink"]["record"] == "sdk"))
     width, height = map(int, cfg["system"]["desktop"].split("x"))
     lines.append("#define RECOMP_DESKTOP_WIDTH %du" % width)
     lines.append("#define RECOMP_DESKTOP_HEIGHT %du" % height)

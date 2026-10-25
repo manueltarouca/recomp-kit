@@ -169,6 +169,10 @@ def load(game_dir):
         raise ValueError('%s: [game] exe_dir must be a relative directory inside the game root' % source)
     game["exe_dir"] = exe_dir.replace("\\", "/")
     system = cfg.setdefault("system", {})
+    bink = cfg.setdefault("bink", {})
+    if (not isinstance(bink, dict) or set(bink) - {"record"}
+            or bink.setdefault("record", "legacy") not in ("legacy", "sdk")):
+        raise ValueError('%s: [bink] record must be "legacy" or "sdk"' % source)
     if system.setdefault("mm_timers", "message_loop") not in ("message_loop", "thread"):
         raise ValueError('%s: [system] mm_timers must be "message_loop" or "thread"' % source)
     desktop = system.setdefault("desktop", "1024x768")

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add OpenAL playback contexts, shared buffers, sources and queues over the
+  host mixer, with clock-driven progress, distance/pan approximation and
+  stable pitch/pan updates. Extend Bink with checked memory windows, SDK
+  frame-buffer planes, rewind/forward seek, full summary/realtime records and
+  opt-in `[bink] record = "sdk"`. This addresses the OpenAL/Bink portions of #32;
+  Epic's modified vorbisfile ABI still needs its five-argument signature.
+
 - Serve VC8 CRT memory, narrow/wide strings, numeric conversions, floating-point
   control, bounded guest printf/scanf arguments, profile-backed files, startup
   data, environment, locale/ctype, exit tables, threads and time. Implement the

@@ -20,6 +20,21 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_bink_record_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text(encoding="utf-8")
+            (game / "globals.toml").write_text("", encoding="utf-8")
+            for record, macro in (("legacy", 0), ("sdk", 1)):
+                (game / "game.toml").write_text(stub+'\n[bink]\nrecord="'+record+'"\n', encoding="utf-8")
+                cfg = game_config.load(game)
+                self.assertIn("#define RECOMP_BINK_SDK_RECORD %d" % macro,gen_game_config.render_header(cfg))
+            for value in ('true', '"other"', '[1]'):
+                (game / "game.toml").write_text(stub+'\n[bink]\nrecord='+value+'\n', encoding="utf-8")
+                with self.assertRaisesRegex(ValueError,"bink"):
+                    game_config.load(game)
+        self.assertEqual(game_config.load(ROOT / "games/stub")["bink"]["record"],"legacy")
+
     def test_expanded_guest_layout(self):
         self.assertEqual(game_config.validate_guest_size(0x80000000),0x80000000)
         self.assertEqual(game_config.validate_heap_base(0x40000000,0x80000000),0x40000000)

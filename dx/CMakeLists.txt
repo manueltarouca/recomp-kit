@@ -1,7 +1,7 @@
 set(POP_DX_SOURCES
   com.cpp dx.cpp host_api.cpp display_stubs.cpp ddraw.cpp d3d.cpp d3d11.cpp dxgi.cpp d3dcompiler.cpp
   d3dx10.cpp dsound.cpp dshow.cpp mp3_source.cpp dinput.cpp dinput_joystick.cpp xinput.cpp qmixer.cpp
-  mss32.cpp redbook.cpp avi.cpp waveout.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp
+  mss32.cpp redbook.cpp avi.cpp waveout.cpp fmod.cpp soundlib.cpp galaxy_stub.cpp riff.cpp bink.cpp video_frame.cpp mf_media.cpp openal.cpp
   mf.cpp weanetr.cpp d3d9.cpp d3d9_raster.cpp d3d9_shader.cpp d3d9_shadergen.cpp host_d9_default.cpp
   d3dx9.cpp d3d8.cpp d3d8_program.cpp d3d8_fixed.cpp)
 
@@ -22,6 +22,12 @@ target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx_null 1)
 
 if(NOT IOS AND NOT ANDROID)
+add_executable(openal_tests tests/openal_tests.cpp ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(openal_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(openal_tests PRIVATE ${POP_WARN_HOST})
+pop_test_binary(openal_tests)
+add_test(NAME openal_tests COMMAND openal_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(openal_tests PROPERTIES LABELS nogame TIMEOUT 30)
 add_executable(d3d9_device_tests tests/d3d9_device_tests.cpp
   ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
 target_link_libraries(d3d9_device_tests PRIVATE recomp_platform recomp_dx recomp_runtime)

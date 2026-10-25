@@ -87,6 +87,12 @@ app. Apple system libraries/frameworks are allowed; no Homebrew libraries
 are required. Bink cinematics decode through these libraries; Smacker
 still refuses to open a video.
 
+OpenAL playback and streaming use the shared host mixer, including clock-based
+progress on a silent host. Bink supports memory-resident input, registered SDK
+planes and rewind/forward seeking. Use `[bink] record = "sdk"` for the SDK
+record fields; the default remains `"legacy"`. See
+[audio compatibility](docs/audio-compat.md) for layouts and approximations.
+
 iOS cross-builds for arm64 and iOS 17.0 with the iPhoneOS SDK. Xcode embeds
 the three dylibs in `Frameworks/` and signs them on copy with the app's
 development identity/team; the executable uses `@executable_path/Frameworks`.
