@@ -114,6 +114,27 @@ int main() {
     os_unlink((base + "/note.txt").c_str());
     os_rmdir((base + "/Folder").c_str());
     os_rmdir(base.c_str());
+    // Async presses survive release, are consumed per key, and do not repeat
+    // just because a host sends another down event for an already held key.
+    for (uint32_t key : {0x52u, 0x01u}) {
+        host_set_key_state(int(key), false);
+        call(c, "user32.dll", "GetAsyncKeyState", {key});
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {key}) == 0);
+        host_set_key_state(int(key), true);
+        CHECK(call(c, "user32.dll", "GetKeyState", {key}) & 0x8000);
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {key}) == 0x8001);
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {key}) == 0x8000);
+        host_set_key_state(int(key), true);
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {key}) == 0x8000);
+        host_set_key_state(int(key), false);
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {key}) == 0);
+        host_set_key_state(int(key), true);
+        host_set_key_state(int(key), false);
+        CHECK(call(c, "user32.dll", "GetKeyState", {key}) == 0);
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {0xffffffff}) == 0);
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {key}) == 1);
+        CHECK(call(c, "user32.dll", "GetAsyncKeyState", {key}) == 0);
+    }
     // Fill the entire shim region last: later API resolutions cannot allocate.
     uint32_t last = 0;
     const uint32_t start = imports_count();

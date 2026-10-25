@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Report the per-key press edge from GetAsyncKeyState alongside its current
+  down state, including a press released between polls. Polling consumes the
+  edge; repeated down events do not create another press.
+
 - Keep Windows fault handling noninteractive after installing the kit's
   diagnostics, so an intentional abort cannot wait on a crash-report dialog.
 

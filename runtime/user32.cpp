@@ -48,6 +48,7 @@ bool g_clipped = false;
 bool (*g_message_waiter)() = nullptr;
 void (*g_window_shown)(uint32_t) = nullptr;
 uint8_t g_key_state[256] = {0};
+static uint8_t g_async_pressed[256] = {0};
 
 // WS_VISIBLE: a window created with it is shown as part of creation.
 const uint32_t WS_VISIBLE = 0x10000000u;
@@ -152,8 +153,12 @@ void host_set_client_size(uint32_t hwnd, int32_t w, int32_t h) {
     }
 }
 void host_set_key_state(int vk, bool down) {
-    if (vk >= 0 && vk < 256)
+    if (vk >= 0 && vk < 256) {
+        // A press survives release until this key's next asynchronous poll.
+        if (down && !(g_key_state[vk] & 0x80))
+            g_async_pressed[vk] = 1;
         g_key_state[vk] = down ? 0x80 : 0x00;
+    }
 }
 void host_set_cursor_pos(int32_t x, int32_t y) {
     g_cursor_x = x;
@@ -1368,7 +1373,12 @@ void u_GetMessageTime(X86 *c) {
 }
 void u_GetAsyncKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);
-    set_eax(c, vk < 256 && g_key_state[vk] ? 0x8000 : 0);
+    uint32_t state = 0;
+    if (vk < 256) {
+        state = (g_key_state[vk] ? 0x8000u : 0) | g_async_pressed[vk];
+        g_async_pressed[vk] = 0;
+    }
+    set_eax(c, state);
 }
 void u_GetKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);

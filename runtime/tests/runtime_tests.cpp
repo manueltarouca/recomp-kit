@@ -2409,7 +2409,7 @@ static void test_windows(X86 *c) {
     call_import(c, "USER32.dll", "ShowCursor", {1});
 
     host_set_key_state(0x41, true);
-    check(call_import(c, "USER32.dll", "GetAsyncKeyState", {0x41}) == 0x8000,
+    check(call_import(c, "USER32.dll", "GetAsyncKeyState", {0x41}) == 0x8001,
           "GetAsyncKeyState sees the host key");
     host_set_key_state(0x41, false);
     // A message box nobody can click is answered with the default button of the
