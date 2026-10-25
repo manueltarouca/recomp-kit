@@ -26,6 +26,10 @@
 
 - Linux fault reports include the host's stack frames.
 
+- Default DirectInput joystick axes to DirectInput's own range, 0..65535 centred
+  at 32768, instead of -32768..32767. A game that never sets `DIPROP_RANGE`
+  read a centred stick as pushed to one corner. Fixes #12.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.
