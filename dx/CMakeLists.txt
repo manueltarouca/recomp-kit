@@ -22,6 +22,15 @@ target_compile_options(recomp_dx_null PRIVATE ${POP_WARN_HOST})
 pop_optimize(recomp_dx_null 1)
 
 if(NOT IOS AND NOT ANDROID)
+add_executable(d3d9_raster_tests tests/d3d9_raster_tests.cpp
+  ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
+target_link_libraries(d3d9_raster_tests PRIVATE recomp_platform recomp_dx recomp_runtime)
+target_compile_options(d3d9_raster_tests PRIVATE ${POP_WARN_WERROR})
+pop_optimize(d3d9_raster_tests 1)
+pop_test_binary(d3d9_raster_tests)
+add_test(NAME d3d9_raster_tests COMMAND d3d9_raster_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(d3d9_raster_tests PROPERTIES LABELS nogame)
+
 add_executable(d3d8_tests tests/d3d8_tests.cpp
   ${POP_ROOT}/runtime/tests/stub_recomp_call.cpp)
 target_link_libraries(d3d8_tests PRIVATE recomp_platform recomp_dx recomp_runtime)

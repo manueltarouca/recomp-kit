@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Correct CPU Direct3D 9 depth testing and clears, integer pixel centres,
+  shared-edge fill, alpha comparisons, blending and color masks. Point and
+  linear sampling respect clamp, mirror, mirror-once and border colors;
+  pre-transformed draws clip to the viewport. Fixes #21.
+
 - Let a port name its CRT `setjmp`/`longjmp` pair in
   `[translate] intrinsics = { setjmp = ..., longjmp = ... }`. Direct setjmp
   calls save the host frame in the caller, and substituted bodies export no

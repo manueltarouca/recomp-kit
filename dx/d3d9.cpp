@@ -650,27 +650,12 @@ void Dev_Clear(X86 *c) {
         LOGW("d3d9: clear %u: flags %x colour %08x rects %u, target %u (%ux%u, %u bpp)%s", g_clears,
              flags, color, count, s ? s->id : 0, s ? s->width : 0, s ? s->height : 0,
              s ? s->bpp : 0, (s && s->id == dev->palette_obj) ? ", the back buffer" : "");
-    uint8_t *bytes = resource_bytes(s);
-    if ((flags & 1u) && bytes && s->bpp == 32) {
-        uint32_t n = (count && rects) ? count : 1;
-        for (uint32_t r = 0; r < n; ++r) {
-            int32_t x1 = 0, y1 = 0, x2 = (int32_t)s->width, y2 = (int32_t)s->height;
-            if (count && rects) {
-                uint32_t q = rects + r * 16u;
-                x1 = std::max(x1, (int32_t)rd32(q));
-                y1 = std::max(y1, (int32_t)rd32(q + 4));
-                x2 = std::min(x2, (int32_t)rd32(q + 8));
-                y2 = std::min(y2, (int32_t)rd32(q + 12));
-            }
-            for (int32_t y = y1; y < y2; ++y) {
-                uint8_t *row = bytes + (size_t)y * s->pitch;
-                for (int32_t x = x1; x < x2; ++x)
-                    memcpy(row + 4 * x, &color, 4);
-            }
-        }
-        d9_raster_invalidate(s->id);
-    }
-    com_ret(c, D3D_OK9);
+    float z;
+    const uint32_t zbits = arg(c, 5);
+    memcpy(&z, &zbits, 4);
+    com_ret(c, d9_raster_clear(dev, s, count, rects, flags, color, z, arg(c, 6))
+                   ? D3D_OK9
+                   : D3DERR_INVALIDCALL);
 }
 
 // (this, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion). The back

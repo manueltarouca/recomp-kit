@@ -5,6 +5,11 @@ as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
 event timers without a message loop, callback cancellation/replacement,
 worker exit/restart, periodic cadence, pinned time and shutdown.
 
+`d3d9_raster_tests` checks CPU pixels for integer sample centres, shared
+triangle edges, viewport clipping, depth formats/comparisons/clears, alpha
+comparisons, blend operations/factors, color masks and texture addressing.
+It runs without game files under the `nogame` label.
+
 `d3d8_tests` exercises the Direct3D 8 guest vtables, stack cleanup, structure
 sizes, resource ownership, shader handles and actual CPU draw pixels.
 `d3d8_program_tests` checks FVF/declaration decoding, bounded shader parsing,
