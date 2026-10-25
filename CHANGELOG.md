@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Route window and thread messages to their receiving guest thread, including
+  WM_QUIT and PostThreadMessageA/W. Fix dotless file searches, align fresh
+  VirtualAlloc reservations to 64 KB, and serve computer-name, temporary-path
+  and CommandLineToArgvW startup calls. Quote executable paths with spaces,
+  accept debugger thread-name notifications and use the full shim region.
+  Fixes #30.
+
 - Give each cooperative guest thread its own scheduler condition and wake
   the next baton holder directly. Translated backward branches poll every
   4096 iterations so import-free loops let workers run; atomic stretches

@@ -39,6 +39,7 @@ void win32_init(const std::string &game_dir);
 // falls back to the legacy root-at-EXE layout.
 void win32_init_layout(const std::string &exe_folder, const std::string &exe_dir);
 const std::string &win32_game_dir();
+std::string win32_executable_guest_path();
 // Guest spelling shared by shell folder APIs; creation uses the write overlay.
 std::string shell_folder_guest_path(uint32_t csidl, bool create);
 
@@ -478,6 +479,7 @@ bool host_window_visible(uint32_t hwnd);
 // ---------------------------------------------------------------------------
 X86 *guest_current_context();
 uint32_t guest_current_thread_id();
+bool guest_thread_exists(uint32_t id);
 bool host_cursor_visible();
 bool host_cursor_clip(int32_t out[4]);
 

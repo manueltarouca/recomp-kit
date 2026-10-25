@@ -283,6 +283,9 @@ void win32_invalidate_dir_cache() {
 const std::string &win32_game_dir() {
     return g_game_dir;
 }
+std::string win32_executable_guest_path() {
+    return g_guest_exe_dir + "\\" RECOMP_EXECUTABLE;
+}
 
 // Called with the guest baton held, like the file shims. Reopening this path
 // gives a host service an independent descriptor without exposing the guest's.
@@ -600,12 +603,12 @@ uint32_t attrs_for(const OsStat &st) {
     return a;
 }
 
-bool wildcard_match(const char *pat, const char *str) {
+bool wildcard_match_raw(const char *pat, const char *str) {
     if (*pat == '\0')
         return *str == '\0';
     if (*pat == '*') {
         for (const char *s = str;; ++s) {
-            if (wildcard_match(pat + 1, s))
+            if (wildcard_match_raw(pat + 1, s))
                 return true;
             if (!*s)
                 return false;
@@ -614,7 +617,21 @@ bool wildcard_match(const char *pat, const char *str) {
     if (*str == '\0')
         return false;
     if (*pat == '?' || tolower((unsigned char)*pat) == tolower((unsigned char)*str))
-        return wildcard_match(pat + 1, str + 1);
+        return wildcard_match_raw(pat + 1, str + 1);
+    return false;
+}
+bool wildcard_match(const char *pat, const char *str) {
+    std::string pattern = pat;
+    if (!pattern.empty() && pattern.back() == '.') {
+        pattern.pop_back();
+        return !strchr(str, '.') && wildcard_match_raw(pattern.c_str(), str);
+    }
+    if (wildcard_match_raw(pat, str))
+        return true;
+    if (pattern.size() >= 2 && pattern.compare(pattern.size() - 2, 2, ".*") == 0) {
+        pattern.resize(pattern.size() - 2);
+        return wildcard_match_raw(pattern.c_str(), str);
+    }
     return false;
 }
 
@@ -744,7 +761,7 @@ void k_VirtualAlloc(X86 *c) {
         LOGV("VirtualAlloc: ignoring requested base %08x, no region there", addr);
     }
 
-    uint32_t base = heap_alloc(pages, true, 4096);
+    uint32_t base = heap_alloc(pages, true, 65536);
     if (!base) {
         set_last_error(ERROR_NOT_ENOUGH_MEMORY_);
         set_eax(c, 0);
@@ -2199,6 +2216,15 @@ X86 *guest_current_context() {
 }
 uint32_t guest_current_thread_id() {
     return t_id;
+}
+bool guest_thread_exists(uint32_t id) {
+    std::lock_guard<std::mutex> lock(g_sched_m);
+    if (threads().empty())
+        return id == 1;
+    for (const GuestThread *thread : threads())
+        if (thread->id == id && !thread->finished)
+            return true;
+    return false;
 }
 
 // --------------------------------------------------------------------------
@@ -3794,6 +3820,8 @@ std::vector<uint32_t> win32_return_chain(uint32_t ebp, size_t max) {
 namespace {
 
 void k_RaiseException(X86 *c) {
+    if (arg(c, 0) == 0x406d1388u)
+        return; // debugger thread-name notification
     // A raise the guest goes on to handle is invisible in a run log otherwise,
     // and the frames it climbed out of are exactly what a language exception
     // hides: the log shows the dialog that reported it and nothing that led
@@ -4850,6 +4878,8 @@ void open_mutex_named(X86 *c, const std::string &name) {
 void get_command_line(X86 *c) {
     if (!g_cmdline_addr) {
         std::string line = module_file_name(0);
+        if (line.find_first_of(" \t") != std::string::npos)
+            line = '"' + line + '"';
         if (const char *extra = recomp_env("GUEST_ARGS"); extra && *extra)
             line += std::string(" ") + extra;
         g_cmdline_addr = guest_strdup(line.c_str());

@@ -43,7 +43,7 @@ static const uint32_t TLS_BASE = TEB_BASE + 0x1000u; // TLS slot array
 static const uint32_t TLS_SLOTS = 64;
 static const uint32_t TRAMP_BASE = GUEST_SHIM_BASE; // import shim trampolines
 static const uint32_t TRAMP_STRIDE = GUEST_SHIM_STRIDE;
-static const uint32_t TRAMP_MAX = 4096; // 4096 * 16 = 64 KB of trampolines
+static const uint32_t TRAMP_MAX = (GUEST_SHIM_END - GUEST_SHIM_BASE) / TRAMP_STRIDE;
 static const uint32_t TRAMP_LIMIT = TRAMP_BASE + TRAMP_STRIDE * TRAMP_MAX;
 
 // ---------------------------------------------------------------------------

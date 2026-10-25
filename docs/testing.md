@@ -5,6 +5,12 @@ as the `nogame` suite `runtime_mm_timer_tests`. It checks worker callbacks and
 event timers without a message loop, callback cancellation/replacement,
 worker exit/restart, periodic cadence, pinned time and shutdown.
 
+`message_tests` checks window ownership, thread-specific quit messages,
+PostThreadMessageA/W and a helper's empty GetMessage loop without host ticks.
+`startup_tests` checks allocation granularity, name/temp buffer sizing,
+shell32 quoting and LocalFree ownership, dotless file searches and the entire
+shim capacity. Quoting golden cases were verified with Windows shell32.
+
 `scheduler_tests` checks progress from import-free loops within two budget
 polls, the 4096-edge budget, atomic protection, host-thread exclusion, a
 20 ms waitable-timer deadline and 16 workers making repeated exclusive

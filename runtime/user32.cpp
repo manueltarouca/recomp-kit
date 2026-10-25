@@ -120,6 +120,7 @@ void host_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lp
     if (msg == 0x0113)
         host_note_cadence("WM_TIMER");
     Msg m{hwnd, msg, wparam, lparam, host_millis(), (uint32_t)g_cursor_x, (uint32_t)g_cursor_y};
+    m.thread = hwnd && find_window(hwnd) ? find_window(hwnd)->thread : guest_current_thread_id();
     queue().push_back(m);
 }
 uint32_t host_main_window() {
@@ -770,9 +771,17 @@ void u_CreateDialogParamA(X86 *c) {
 // A message passes the filter when the window matches (0 means any) and the
 // message id is in [min, max]; min == max == 0 means no id filter at all.
 bool msg_matches(const Msg &m, uint32_t filter_hwnd, uint32_t min_msg, uint32_t max_msg) {
+    const uint32_t thread = guest_current_thread_id();
+    if (m.hwnd) {
+        const Window *window = find_window(m.hwnd);
+        if (!window || window->thread != thread)
+            return false;
+    } else if ((m.thread ? m.thread : 1) != thread)
+        return false;
     if (m.message == 0x0012)
         return true; // WM_QUIT is never filtered out
-    if (filter_hwnd && m.hwnd != filter_hwnd)
+    if ((filter_hwnd == 0xffffffffu && m.hwnd) ||
+        (filter_hwnd && filter_hwnd != 0xffffffffu && m.hwnd != filter_hwnd))
         return false;
     if (min_msg == 0 && max_msg == 0)
         return true;
@@ -801,14 +810,23 @@ static bool pending_paint(uint32_t p, uint32_t hwnd, uint32_t min_msg, uint32_t 
             continue;
         if (!p)
             return true; // only asked whether there is one
-        last_message = m;
+        last_message() = m;
         store_msg(p, m);
         return true;
     }
     return false;
 }
 
-Msg last_message{};
+Msg &last_message() {
+    static std::map<uint32_t, Msg> values;
+    return values[guest_current_thread_id()];
+}
+bool queued_message_pending() {
+    for (const auto &message : queue())
+        if (msg_matches(message, 0, 0, 0))
+            return true;
+    return false;
+}
 
 bool paint_pending() {
     return pending_paint(0, 0, 0, 0);
@@ -855,7 +873,7 @@ void peek_message(X86 *c) {
     for (auto it = queue().begin(); it != queue().end(); ++it) {
         if (!msg_matches(*it, filter_hwnd, min_msg, max_msg))
             continue;
-        last_message = *it;
+        last_message() = *it;
         store_msg(p, *it);
         if (flags & 1)
             queue().erase(it); // PM_REMOVE
@@ -879,7 +897,7 @@ void u_GetMessageA(X86 *c) {
     uint32_t p = arg(c, 0), filter_hwnd = arg(c, 1);
     uint32_t min_msg = arg(c, 2), max_msg = arg(c, 3);
 
-    if (filter_hwnd && !find_window(filter_hwnd)) {
+    if (filter_hwnd && filter_hwnd != 0xffffffffu && !find_window(filter_hwnd)) {
         set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         set_eax(c, 0xffffffffu);
         return;
@@ -899,7 +917,7 @@ void u_GetMessageA(X86 *c) {
                 continue;
             Msg m = *it;
             queue().erase(it);
-            last_message = m;
+            last_message() = m;
             store_msg(p, m);
             set_eax(c, m.message == 0x0012 ? 0 : 1); // WM_QUIT ends the loop
             return;
@@ -998,6 +1016,25 @@ void u_PostMessageA(X86 *c) {
         return;
     }
     host_post_message(arg(c, 0), arg(c, 1), arg(c, 2), arg(c, 3));
+    set_eax(c, 1);
+}
+
+void u_PostThreadMessage(X86 *c) {
+    const uint32_t thread = arg(c, 0);
+    if (!guest_thread_exists(thread)) {
+        set_last_error(1444); // ERROR_INVALID_THREAD_ID
+        set_eax(c, 0);
+        return;
+    }
+    Msg m{0,
+          arg(c, 1),
+          arg(c, 2),
+          arg(c, 3),
+          host_millis(),
+          uint32_t(g_cursor_x),
+          uint32_t(g_cursor_y)};
+    m.thread = thread;
+    queue().push_back(m);
     set_eax(c, 1);
 }
 
@@ -1324,10 +1361,10 @@ void u_GetCursorPos(X86 *c) {
     set_eax(c, 1);
 }
 void u_GetMessagePos(X86 *c) {
-    set_eax(c, (last_message.pty << 16) | (last_message.ptx & 0xffff));
+    set_eax(c, (last_message().pty << 16) | (last_message().ptx & 0xffff));
 }
 void u_GetMessageTime(X86 *c) {
-    set_eax(c, last_message.time);
+    set_eax(c, last_message().time);
 }
 void u_GetAsyncKeyState(X86 *c) {
     uint32_t vk = arg(c, 0);
@@ -1797,7 +1834,8 @@ const ImportShim g_user32_shims[] = {
     {"USER32.dll", "MapVirtualKeyExA", 3, u_MapVirtualKeyA},
     {"USER32.dll", "ToUnicode", 6, nullptr},
     {"USER32.dll", "SendInput", 3, nullptr},
-    {"USER32.dll", "PostThreadMessageA", 4, nullptr},
+    {"USER32.dll", "PostThreadMessageA", 4, u_PostThreadMessage},
+    {"USER32.dll", "PostThreadMessageW", 4, u_PostThreadMessage},
     {"USER32.dll", "GetForegroundWindow", 0, u_GetForegroundWindow},
     {"USER32.dll", "WaitMessage", 0, u_WaitMessage},
     {"USER32.dll", "GetActiveWindow", 0, u_GetActiveWindow},
