@@ -791,17 +791,19 @@ static void test_loader() {
     }
 
     // TEB.
-    check(rd32(0x0fe00000) == 0xffffffffu, "FS:[0] SEH head is -1");
-    check(rd32(0x0fe00018) == 0x0fe00000u, "FS:[0x18] points at the TEB");
-    check(rd32(0x0fe0002c) == 0x0fe01000u, "FS:[0x2c] points at the TLS array");
-    check(loader_context()->fs_base == 0x0fe00000u, "fs_base is the TEB");
+    check(rd32(GUEST_TEB_BASE) == 0xffffffffu, "FS:[0] SEH head is -1");
+    check(rd32(GUEST_TEB_BASE + 0x18) == GUEST_TEB_BASE, "FS:[0x18] points at the TEB");
+    check(rd32(GUEST_TEB_BASE + 0x2c) == GUEST_TEB_BASE + 0x1000,
+          "FS:[0x2c] points at the TLS array");
+    check(loader_context()->fs_base == GUEST_TEB_BASE, "fs_base is the TEB");
     const X86 *ic = loader_context();
     check(ic->fpu_cw == 0x037f && ic->fpu_sw == 0 && ic->fpu_tag == 0xffff && ic->fpu_top == 0,
           "the x87 starts at cw=%04x sw=%04x tag=%04x top=%u", ic->fpu_cw, ic->fpu_sw, ic->fpu_tag,
           ic->fpu_top);
     check(x86_get_eflags(ic) == 0x00000202u, "PUSHFD at process start reads %08x",
           x86_get_eflags(ic));
-    check(loader_context()->r[R_ESP] > 0x0ef00000 && loader_context()->r[R_ESP] < 0x0f000000,
+    check(loader_context()->r[R_ESP] > GUEST_STACK_TOP - GUEST_STACK_SIZE &&
+              loader_context()->r[R_ESP] < GUEST_STACK_TOP,
           "initial ESP %08x is inside the stack", loader_context()->r[R_ESP]);
 
     // A wrong image must be refused.
