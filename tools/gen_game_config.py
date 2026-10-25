@@ -59,6 +59,7 @@ def render_header(cfg):
     native = controls["native"]
     lines.append("#define RECOMP_CONTROLS_XINPUT %d" % int(native["xinput"]))
     lines.append("#define RECOMP_CONTROLS_DINPUT %d" % int(native["dinput"]))
+    lines.append("#define RECOMP_CONTROLS_NATIVE_ATTACHED_ONLY %d" % int(native["attached_only"]))
     lines.append("#define RECOMP_CONTROLS_NATIVE_AXES %s" % c_string(",".join(native["axes"])))
     lines.append("#define RECOMP_CONTROLS_NATIVE_BUTTONS %s" % c_string(",".join(native["buttons"])))
     lines.append("#define RECOMP_GUEST_SIZE %s" % c_hex(game["guest_size"]))

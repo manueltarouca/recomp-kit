@@ -1875,6 +1875,8 @@ static void test_host_pad_defaults() {
 
     CHECK_EQ(host_pad_mode(), 0);
     CHECK_EQ(host_pad_native_apis(), 0);
+    CHECK_EQ(host_pad_attached_only(), 0);
+    CHECK_EQ(host_pad_attached(), 0);
 
     HostPadState pad;
     memset(&pad, 0xcd, sizeof pad);

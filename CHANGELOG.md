@@ -17,6 +17,10 @@
   longer invent entries that split real functions; absolute address
   immediates and data pointers remain discoverable. Fixes #17.
 
+- Add `[controls.native] attached_only = true` to expose the native DirectInput
+  and XInput pad only while a physical controller is connected. It defaults
+  to false, preserving existing virtual-pad behavior. Fixes #14.
+
 - Add a Direct3D 8 frontend with version 8 interfaces and structure layouts,
   FVF and vertex-declaration conversion, vs_1_1/ps_1_1 shader handles, and
   generated unlit fixed-function programs shared by the CPU and GPU renderers.

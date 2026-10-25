@@ -118,14 +118,15 @@ def load_controls(controls, touch, source):
     controls["mapped"] = mapped
 
     native = dict(controls.get("native", {}))
-    unknown_native = sorted(k for k in native if k not in ("xinput", "dinput", "axes", "buttons"))
+    unknown_native = sorted(k for k in native if k not in ("xinput", "dinput", "attached_only", "axes", "buttons"))
     if unknown_native:
-        raise ValueError("%s: [controls.native] may name only xinput, dinput, axes, buttons, not %s"
+        raise ValueError("%s: [controls.native] may name only xinput, dinput, attached_only, axes, buttons, not %s"
                          % (source, ", ".join(unknown_native)))
     native.setdefault("xinput", True)
     native.setdefault("dinput", True)
-    if not isinstance(native["xinput"], bool) or not isinstance(native["dinput"], bool):
-        raise ValueError("%s: [controls.native] xinput and dinput must be booleans" % source)
+    native.setdefault("attached_only", False)
+    if any(not isinstance(native[key], bool) for key in ("xinput", "dinput", "attached_only")):
+        raise ValueError("%s: [controls.native] xinput, dinput and attached_only must be booleans" % source)
     axes = native.setdefault("axes", ["x", "y", "z", "rz", "rx", "ry"])
     if not isinstance(axes, list) or sorted(axes) != sorted(NATIVE_AXES):
         raise ValueError("%s: [controls.native] axes must list all six of %s exactly once, not %r"
