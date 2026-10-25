@@ -6,6 +6,12 @@
   and XInput pad only while a physical controller is connected. It defaults
   to false, preserving existing virtual-pad behavior. Fixes #14.
 
+- Add a Direct3D 8 frontend with version 8 interfaces and structure layouts,
+  FVF and vertex-declaration conversion, vs_1_1/ps_1_1 shader handles, and
+  generated unlit fixed-function programs shared by the CPU and GPU renderers.
+  Unsupported operations report failure; caps omit fixed lighting, fog,
+  volume textures, bump mapping and user clip planes.
+
 - Cut host work in guest polling loops. PeekMessage pumps audio and window
   presents at most once per `RECOMP_PEEK_PUMP_US` (default 1000), a
   GetTickCount spin that sees no time pass sleeps 1 ms cooperatively, and the
