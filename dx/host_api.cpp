@@ -163,9 +163,13 @@ DirtyRects subtract(const DirtyRects &from, HostDirtyRect cut) {
 }
 } // namespace
 extern "C" {
+static int legacy_writeback = -1; // getenv per CPU write was a hot path
 int host_d3d_legacy_writeback(void) {
-    const char *v = recomp_env("LEGACY_WRITEBACK");
-    return v && !strcmp(v, "1");
+    if (legacy_writeback < 0) {
+        const char *v = recomp_env("LEGACY_WRITEBACK");
+        legacy_writeback = v && !strcmp(v, "1");
+    }
+    return legacy_writeback;
 }
 void host_d3d_mark_dirty(uint32_t s, uint32_t g, HostDirtyRect r) {
     if (!s || !nonempty(r))
@@ -249,6 +253,7 @@ void host_d3d_forget_generation(uint32_t s, uint32_t g) {
     dirty_regions.erase({s, g});
 }
 void host_d3d_reset_coherence(void) {
+    legacy_writeback = -1; // re-read the switch with the new interval
     dirty_regions.clear();
     memset(readbacks, 0, sizeof readbacks);
     clean_reads = 0;

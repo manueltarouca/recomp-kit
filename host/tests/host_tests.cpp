@@ -30,6 +30,7 @@
 #include "../performance_overlay.h"
 #include "../controls/overlay.h"
 #include "../controls/router.h"
+#include "../../runtime/clock_spin.h"
 #include "../../runtime/frame_deadline.h"
 #include "../audio_capture.h"
 #include "../midi.h"
@@ -3830,11 +3831,11 @@ static void test_same_frame_legacy_pixels(D3DRenderer *renderer) {
     std::vector<uint16_t> reference;
     for (bool legacy : {true, false}) {
         renderer->discard();
-        host_d3d_reset_coherence();
         if (legacy)
             os_setenv("RECOMP_LEGACY_WRITEBACK", "1");
         else
             os_unsetenv("RECOMP_LEGACY_WRITEBACK");
+        host_d3d_reset_coherence();
         renderer->setSceneWidth(legacy ? 0 : 256, legacy ? 0 : 192);
         Surface surface(805, 128, 96);
         host_d3d_bind_generation(&surface.desc, 1, 8005);
@@ -3927,6 +3928,7 @@ static void test_same_frame_legacy_pixels(D3DRenderer *renderer) {
     }
     g_t5_legacy_frame = 0;
     os_unsetenv("RECOMP_LEGACY_WRITEBACK");
+    host_d3d_reset_coherence();
     renderer->setSceneWidth(0, 0);
     renderer->discard();
 }
@@ -9223,6 +9225,30 @@ static void test_native_frame_metrics() {
     p.displayed(2.5, false, 3, 8);
     CHECK(p.snapshot(2.5, 3).intervals_ms.back() > 299);
 }
+// GetTickCount turns a same-millisecond spin into a short sleep, but never
+// inside an atomic stretch or a natively paced draw wait, and a poll that may
+// not sleep leaves the count where it was.
+static void test_clock_spin_detection() {
+    ClockSpin spin;
+    int sleeps = 0;
+    for (uint32_t i = 0; i < ClockSpin::kSpinPolls * 4; ++i)
+        sleeps += spin.observe(500, true);
+    CHECK_EQ(sleeps, 3); // the first poll only starts the count
+    sleeps = 0;
+    for (uint32_t ms = 600; ms < 700; ++ms)
+        sleeps += spin.observe(ms, true); // a moving clock is not a spin
+    CHECK_EQ(sleeps, 0);
+    for (int i = 0; i < 8; ++i)
+        sleeps += spin.observe(700, true); // the first poll starts the count
+    for (int i = 0; i < 1000; ++i)
+        sleeps += spin.observe(700, false); // atomic: never sleep, never count
+    for (int i = 0; i < 8; ++i)
+        sleeps += spin.observe(700, true);
+    CHECK_EQ(sleeps, 0); // 15 counted polls so far
+    CHECK(spin.observe(700, true));
+    spin.slept(701);
+    CHECK(!spin.observe(701, true)); // the count restarts after a sleep
+}
 static void test_wide_cursor_bound() {
     constexpr uint32_t base = RECOMP_HOOK_MOUSE_DEVICE_PTR;
     constexpr uint32_t right = RECOMP_HOOK_MOUSE_DEVICE_RIGHT;
@@ -9820,6 +9846,7 @@ int main(int argc, char **argv) {
     mem_init();
     test_fullscreen_edge_presentation();
     test_native_frame_metrics();
+    test_clock_spin_detection();
     test_wide_cursor_bound();
     test_pointer_reaches_scrolling_edges();
     test_native_overlay_pixels();

@@ -188,12 +188,31 @@ void note_screen_size() {
 }
 
 // The window's size in points and in drawable pixels.
+//
+// SDL_GetWindowSizeInPixels calls SDL_GetDisplayForWindow, which writes a window
+// property on every call - a string hash plus a hashtable remove and insert. The
+// per-event pointer-capture update (update_platform_pointer_capture) calls this,
+// so a mouse-motion flood turned that property churn into the front-end's single
+// biggest cost. The size only changes on a window event, so cache it and refresh
+// lazily after any window event invalidates the cache.
+int g_win_bw = 0, g_win_bh = 0, g_win_dw = 0, g_win_dh = 0;
+bool g_win_size_valid = false;
+void invalidate_window_sizes() {
+    g_win_size_valid = false;
+}
 void window_sizes(int *bw, int *bh, int *dw, int *dh) {
     *bw = *bh = *dw = *dh = 0;
     if (!g_window)
         return;
-    SDL_GetWindowSize(g_window, bw, bh);
-    SDL_GetWindowSizeInPixels(g_window, dw, dh);
+    if (!g_win_size_valid) {
+        SDL_GetWindowSize(g_window, &g_win_bw, &g_win_bh);
+        SDL_GetWindowSizeInPixels(g_window, &g_win_dw, &g_win_dh);
+        g_win_size_valid = true;
+    }
+    *bw = g_win_bw;
+    *bh = g_win_bh;
+    *dw = g_win_dw;
+    *dh = g_win_dh;
 }
 
 // The presenter's game rectangle for a drawable of dw x dh (present.h): in
@@ -1030,6 +1049,10 @@ void handle_event(const SDL_Event &event) {
         return;
     if (handle_editor_event(event))
         return;
+    // Any window event may change the window or drawable size; drop the cached
+    // size so the next window_sizes() re-reads it from SDL.
+    if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST)
+        invalidate_window_sizes();
     const SDL_WindowID ours = g_window ? SDL_GetWindowID(g_window) : 0;
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
@@ -1234,6 +1257,29 @@ int service(double seconds) {
         queued_before = g_pending_input.size();
     }
     SDL_Event event;
+    // Pumping (Wayland dispatch plus a DBus poll) costs far more than the 1 ms
+    // waits the clock-spin and frame limiter ask for, thousands of times a
+    // second. Within 4 ms of the last pump, sleep instead and take only what
+    // is already queued; a longer wait pumps once the window has passed.
+    static uint64_t last_pump_ns = 0;
+    const uint64_t pump_gap_ns = 4000000u;
+    uint64_t now_ns = SDL_GetTicksNS();
+    if (last_pump_ns && now_ns - last_pump_ns < pump_gap_ns) {
+        const uint64_t want_ns = uint64_t(seconds > 0.0 ? seconds * 1e9 : 0.0);
+        const uint64_t left_ns = pump_gap_ns - (now_ns - last_pump_ns);
+        if (want_ns)
+            SDL_DelayNS(want_ns < left_ns ? want_ns : left_ns);
+        if (want_ns <= left_ns) {
+            while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_FIRST, SDL_EVENT_LAST) == 1)
+                handle_event(event);
+            std::lock_guard<std::mutex> held(g_pending_input_m);
+            if (g_pending_input.size() != queued_before)
+                return 1;
+            return host_idle_wait_result(before, host_input_notify_count());
+        }
+        seconds -= double(left_ns) / 1e9;
+    }
+    last_pump_ns = SDL_GetTicksNS();
     bool first = true;
     for (;;) {
         bool got;
@@ -1278,6 +1324,21 @@ controls::Screen controls_screen() {
 
 // The housekeeping every turn does once the events are in.
 void after_events() {
+    // idle_wait() calls this on every guest block, which happens thousands of
+    // times a second (frame-limit waits, scheduler yields, clock-spin sleeps).
+    // The controls/gamepad/pump work below is far too heavy to run that often:
+    // it dominated the profile, and by overrunning the guest's short pacing
+    // sleeps it made the in-game clock fall behind real time (time dilation) and
+    // menus render choppily. Input and gestures only need servicing at a few
+    // hundred Hz, so rate limit the housekeeping; a guest block that arrives
+    // sooner simply skips it. Window and mode changes are applied by
+    // apply_window_mode()/apply_mode_change() before this call, so they are not
+    // gated here.
+    static uint64_t last_ns = 0;
+    const uint64_t now_ns = SDL_GetTicksNS();
+    if (last_ns && now_ns - last_ns < 4000000u) // 4 ms -> 250 Hz
+        return;
+    last_ns = now_ns;
     {
         // Time-based gestures (a long press) fire from the clock, not an event,
         // and deferred clicks go out once the game's cursor has caught up and

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Cut host work in guest polling loops. PeekMessage pumps audio and window
+  presents at most once per `RECOMP_PEEK_PUMP_US` (default 1000), a
+  GetTickCount spin that sees no time pass sleeps 1 ms cooperatively, and the
+  SDL idle service pumps events at most every 4 ms.
+
 - Group a frame's UI blit records with a left-to-right sweep instead of
   testing every pair. Menus with hundreds of small blits no longer stall
   the presenter.

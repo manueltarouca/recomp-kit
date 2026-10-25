@@ -430,8 +430,19 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     uint8_t argc = tramps()[idx].argc;
     // A guest exception can longjmp across fn(c). Keep no C++ owner live
     // across that call, and do not retain a pointer into the movable vector.
+    // This runs for every guest import call, and the game's message loop polls
+    // PeekMessage at a high rate, so copy the name with a bounded memcpy rather
+    // than snprintf's format parse. A guest longjmp across fn(c) can realloc the
+    // vector, so desc must be an owned stack copy, not a pointer into it.
     char desc[512];
-    snprintf(desc, sizeof desc, "%s", tramps()[idx].desc.c_str());
+    {
+        const std::string &d = tramps()[idx].desc;
+        size_t n = d.size();
+        if (n >= sizeof desc)
+            n = sizeof desc - 1;
+        memcpy(desc, d.data(), n);
+        desc[n] = '\0';
+    }
     ++tramps()[idx].calls;
     ++g_import_calls;
 

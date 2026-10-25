@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Defined in kernel32.cpp with the scheduler.
@@ -820,10 +821,35 @@ void peek_message(X86 *c) {
     // right place rather than a convenient one, and it is where the audio
     // shims get their tick - a streamed sound is refilled by calling the guest
     // back, and only a thread holding the scheduler baton may do that.
-    host_pump_timers(c);
+    //
+    // The game spins this poll tens of thousands of times per rendered frame
+    // (a level-selector screen measured ~83k calls/second). The audio pump and
+    // the window z-order present do not advance faster than wall time - audio runs on a 21 ms period and
+    // the presenter on the display refresh - so doing it in full on every poll
+    // only burns the thread: at 5 fps it was ~83k audio pumps and surface
+    // z-order sorts per second, two thirds of the frame. Coalesce the pumps to
+    // a short wall-clock interval. A busy poll loop then stays cheap while
+    // timers and audio still tick at 1 kHz by default, far above what they
+    // need. RECOMP_PEEK_PUMP_US tunes the interval; 0 restores per-poll pumping.
+    // Only one guest thread holds the baton at a time, so plain statics are safe.
+    static uint64_t last_pump_ns = 0;
+    static int64_t pump_interval_ns = -1;
+    if (pump_interval_ns < 0) {
+        const char *v = recomp_env("PEEK_PUMP_US");
+        pump_interval_ns = (int64_t)(v ? strtoul(v, nullptr, 10) : 1000) * 1000;
+    }
+    // Window timers and mouse input stay per poll: they are cheap, and a
+    // message the guest is polling for must be there on the next poll.
+    const uint64_t now_ns = os_monotonic_ns();
+    const bool pump = now_ns - last_pump_ns >= (uint64_t)pump_interval_ns;
+    if (pump) {
+        last_pump_ns = now_ns;
+        host_pump_timers(c);
+    }
     pump_window_timers();
     pump_mouse_input(c);
-    gdi_present_windows();
+    if (pump)
+        gdi_present_windows();
     uint32_t p = arg(c, 0), filter_hwnd = arg(c, 1);
     uint32_t min_msg = arg(c, 2), max_msg = arg(c, 3), flags = arg(c, 4);
     for (auto it = queue().begin(); it != queue().end(); ++it) {
