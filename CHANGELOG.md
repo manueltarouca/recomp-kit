@@ -6,6 +6,10 @@
   (`RECOMP_QMIX_LEAD_MS`), so a long guest frame no longer lets a stream run
   dry with an audible gap.
 
+- Group a frame's UI blit records with a left-to-right sweep instead of
+  testing every pair. Menus with hundreds of small blits no longer stall
+  the presenter.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.

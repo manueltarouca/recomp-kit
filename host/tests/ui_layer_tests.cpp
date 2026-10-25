@@ -209,6 +209,40 @@ static void test_connectivity_uses_records() {
     CHECK(b.balanced());
 }
 
+// Grouping sweeps each source's records by left edge and stops testing a
+// rectangle once later ones start beyond its right edge. A wide record must
+// stay testable across many short ones, and a busy menu's worth of separate
+// glyphs must still come out one element each.
+static void test_grouping_sweep_matches_pairwise_connectivity() {
+    test_frame_builder b;
+    b.revision({4, 1}, 256, 16, 8, std::vector<uint8_t>(256 * 16, 1));
+    solid(b, 5);
+    b.blit(4, 0, 0, 200, 4); // A long bar.
+    for (int x = 0; x < 200; x += 20)
+        b.blit(4, x, 40, 8, 8); // Islands below it; each starts and ends under the bar.
+    b.blit(4, 200, 4, 8, 8);    // Touches only the bar's far corner.
+    b.blit(5, 100, 0, 8, 4);    // Another source over the bar stays apart.
+    UiFrame out{};
+    ui_layer_extract(b.frame, 640, 480, nullptr, &out);
+    CHECK(out.elements.size() == 12);
+    const auto bar = std::find_if(out.elements.begin(), out.elements.end(),
+                                  [](const UiElement &e) { return e.src == 4 && e.y == 0; });
+    CHECK(bar != out.elements.end() && bar->w == 208 && bar->h == 12);
+
+    b.records.clear();
+    for (int row = 0; row < 25; ++row)
+        for (int col = 0; col < 40; ++col)
+            b.blit(4, col * 10, row * 10, 8, 8); // Two empty pixels apart.
+    ui_layer_extract(b.frame, 640, 480, nullptr, &out);
+    CHECK(out.elements.size() == 1000);
+    b.records.clear();
+    for (int col = 39; col >= 0; --col)
+        b.blit(4, col * 8, 0, 8, 8); // Touching, submitted right to left.
+    ui_layer_extract(b.frame, 640, 480, nullptr, &out);
+    CHECK(out.elements.size() == 1 && out.elements[0].w == 320);
+    CHECK(b.balanced());
+}
+
 static void test_movie_bypasses_ui_and_clears_previous() {
     test_frame_builder b;
     solid(b, 4);
@@ -405,6 +439,8 @@ int main() {
         {"per-element keys, revisions and palettes", test_replay_per_element_with_key_and_palette},
         {"cursor and HUD flags", test_cursor_and_hud_flags},
         {"record connectivity and holes", test_connectivity_uses_records},
+        {"grouping sweep matches pairwise connectivity",
+         test_grouping_sweep_matches_pairwise_connectivity},
         {"movie bypass and UI transitions", test_movie_bypasses_ui_and_clears_previous},
         {"CPU pitch, RGB565 and destination coverage", test_cpu_pitch_rgb565_and_coverage},
         {"source offsets, key ranges and replay order", test_source_offsets_keys_and_order},
