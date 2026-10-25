@@ -1267,6 +1267,25 @@ class Image(object):
         """
         starts, interior = set(), set()
         skip = list(exclude)
+        # Relative control-flow operands encode offsets, never absolute code
+        # pointers. Mark their storage from known instruction starts before
+        # classifying destinations, including ones already known as code.
+        # Keep ordinary PUSH/MOV/LEA address immediates eligible for discovery.
+        relative_storage = set()
+        prefixes = {0x26, 0x2e, 0x36, 0x3e, 0x64, 0x65, 0x66, 0x67, 0xf0, 0xf2, 0xf3}
+        for start in covered:
+            at, word_operand = start, False
+            while at < min(start + 15, self.end) and self.rd8(at) in prefixes:
+                word_operand |= self.rd8(at) == 0x66
+                at += 1
+            opcode = self.rd8(at)
+            if opcode in (0xe8, 0xe9):
+                operand = at + 1
+            elif opcode == 0x0f and self.rd8(at + 1) in range(0x80, 0x90):
+                operand = at + 2
+            else:
+                continue
+            relative_storage.update(range(start + 1, min(operand + (2 if word_operand else 4), self.end)))
 
         def excluded(va):
             return any(lo <= va < hi for lo, hi in skip)
@@ -1275,6 +1294,9 @@ class Image(object):
             blob = self.data[lo - self.base:hi - self.base]
             # len(blob) - 3 so the section's final dword is examined too.
             for off in range(len(blob) - 3):
+                source = lo + off
+                if source in covered or source in relative_storage:
+                    continue
                 quad = blob[off:off + 4]
                 va = int.from_bytes(quad, "little")
                 if va in starts or va in interior:

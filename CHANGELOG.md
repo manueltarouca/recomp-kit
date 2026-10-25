@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep decoded opcode bytes and relative CALL/JMP/Jcc operands out of the
+  translator's data-pointer scan. Accidental address-shaped encodings no
+  longer invent entries that split real functions; absolute address
+  immediates and data pointers remain discoverable. Fixes #17.
+
 - Add a Direct3D 8 frontend with version 8 interfaces and structure layouts,
   FVF and vertex-declaration conversion, vs_1_1/ps_1_1 shader handles, and
   generated unlit fixed-function programs shared by the CPU and GPU renderers.
