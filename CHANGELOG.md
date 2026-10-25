@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep Windows fault handling noninteractive after installing the kit's
+  diagnostics, so an intentional abort cannot wait on a crash-report dialog.
+
 - Keep pointer-discovered switch methods callable when cases share a listed
   tail or the default also appears in the jump table. Preserve the verified
   default body before weaker pointer candidates can split it away.

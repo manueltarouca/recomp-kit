@@ -57,8 +57,13 @@ static void access(unsigned mode) {
     }
 }
 
+static void fatal_access(const char *) {
+    os_exit_immediately(134);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
+        os_install_fault_handlers(fatal_access);
         os_setenv("RECOMP_NULL_FAULTS", "1");
         mem_init();
         access((unsigned)std::strtoul(argv[1], nullptr, 10));

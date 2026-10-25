@@ -588,6 +588,11 @@ static LONG WINAPI fault_filter(EXCEPTION_POINTERS *info) {
 
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
+    // Our stderr diagnostics own fault reporting. UCRT abort() otherwise
+    // invokes Windows Error Reporting, whose dialog can park a headless child
+    // indefinitely before os_wait receives its termination status.
+    SetErrorMode(GetErrorMode() | SEM_NOGPFAULTERRORBOX);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     SetUnhandledExceptionFilter(fault_filter);
     return 1;
 }
