@@ -18,7 +18,9 @@ overflow refusal, sort callbacks, UTF-16 strings, integer and floating-point
 conversions, x87/MXCSR control, printf/scanf and legacy NaNs, secure truncation,
 file operations through a temporary resolver, stable descriptors across many
 opens, startup data, environment, ctype, exit tables, time, char/wchar_t C++
-strings and CRT thread exit/errno cleanup. Child processes verify named aborts
+strings and CRT thread exit/errno cleanup. Child processes exercise Unicode
+argv/environment round trips through CRT and Win32 (surrogate pairs included).
+They also check named aborts
 for out-of-arena memory and file transfers, multiplication overflow, unknown
 required imports and unbounded format widths. `msvc_eh_tests` additionally
 catches a CRT string position exception by value through a live checkpoint.

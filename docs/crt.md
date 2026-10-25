@@ -33,6 +33,8 @@ profile overlay. No original game asset becomes writable through CRT fopen.
 shared with Win32, initializer/exit tables, CRT threads, time, and C/en-US
 locale helpers. It never copies the host process environment into the guest.
 The command-line data pointers are the same allocations returned by Win32.
+Wide argv and environment strings decode that seam's UTF-8 into UTF-16,
+including surrogate pairs; wide environment updates convert back to UTF-8.
 ExitThread/ExitProcess forwarding dispatches in place without adding a
 callback ownership record that the nonlocal exit would strand.
 

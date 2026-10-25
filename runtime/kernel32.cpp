@@ -1458,11 +1458,16 @@ static std::vector<std::string> environment() {
 
 void k_GetEnvironmentStrings(X86 *c) {
     if (!g_envblock_addr || !heap_owns(g_envblock_addr)) {
-        uint32_t bytes = 1;
+        uint64_t bytes = 2;
         const auto values = environment();
         for (const auto &value : values)
-            bytes += uint32_t(value.size()) + 1;
-        uint32_t a = heap_alloc(bytes, true);
+            bytes += value.size() + 1;
+        if (bytes > UINT32_MAX) {
+            set_last_error(ERROR_NOT_ENOUGH_MEMORY_);
+            set_eax(c, 0);
+            return;
+        }
+        uint32_t a = heap_alloc(uint32_t(bytes), true);
         uint32_t at = a;
         if (a)
             for (const auto &value : values)
@@ -1474,21 +1479,21 @@ void k_GetEnvironmentStrings(X86 *c) {
 
 void k_GetEnvironmentStringsW(X86 *c) {
     if (!g_envblockw_addr || !heap_owns(g_envblockw_addr)) {
-        uint32_t chars = 1;
+        uint64_t chars = 2;
         const auto values = environment();
         for (const auto &value : values)
-            chars += uint32_t(value.size()) + 1;
-        uint32_t a = heap_alloc(chars * 2, true);
+            chars += value.size() + 1;
+        if (chars > UINT32_MAX / 2) {
+            set_last_error(ERROR_NOT_ENOUGH_MEMORY_);
+            set_eax(c, 0);
+            return;
+        }
+        uint32_t a = heap_alloc(uint32_t(chars * 2), true);
         uint32_t at = a;
         if (a)
             for (const auto &value : values) {
-                const char *s = value.c_str();
-                for (uint32_t j = 0; s[j]; ++j) {
-                    wr16(at, (uint16_t)(uint8_t)s[j]);
-                    at += 2;
-                }
-                wr16(at, 0);
-                at += 2;
+                at +=
+                    (gm_put_wstr(at, value, uint32_t((uint64_t(a) + chars * 2 - at) / 2)) + 1) * 2;
             }
         g_envblockw_addr = a;
     }
@@ -4902,6 +4907,11 @@ void get_command_line(X86 *c) {
 std::vector<std::string> win32_environment() {
     return environment();
 }
+uint32_t win32_environment_block_w() {
+    X86 c{};
+    k_GetEnvironmentStringsW(&c);
+    return c.r[R_EAX];
+}
 bool win32_set_environment(const std::string &name, const std::string *value) {
     if (name.empty() || name.find('=') != std::string::npos)
         return false;
@@ -5269,7 +5279,6 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "OpenProcess", 3, nullptr},
     {"KERNEL32.dll", "ExpandEnvironmentStringsW", 3, nullptr},
     {"KERNEL32.dll", "GetCurrentDirectoryW", 2, nullptr},
-    {"KERNEL32.dll", "GetEnvironmentVariableW", 4, nullptr},
     {"KERNEL32.dll", "VerLanguageNameW", 3, nullptr},
     {"KERNEL32.dll", "SearchPathW", 6, nullptr},
     {"KERNEL32.dll", "GetStringTypeA", 5, k_GetStringTypeA},

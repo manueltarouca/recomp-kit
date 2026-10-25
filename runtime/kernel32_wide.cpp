@@ -752,6 +752,57 @@ void k_GetCommandLineW(X86 *c) {
 void k_GetStartupInfoW(X86 *c) {
     startup_info(c);
 }
+void k_GetEnvironmentVariableW(X86 *c) {
+    const std::string name = gm_wstr(arg(c, 0));
+    const uint32_t out = arg(c, 1), cap = arg(c, 2), block = win32_environment_block_w();
+    if (!block) {
+        set_last_error(8);
+        set_eax(c, 0);
+        return;
+    }
+    const uint32_t units = heap_size(block) / 2;
+    uint32_t pos = 0;
+    while (pos < units && rd16(block + pos * 2)) {
+        const uint32_t start = pos;
+        uint32_t equals = UINT32_MAX;
+        while (pos < units && rd16(block + pos * 2)) {
+            if (equals == UINT32_MAX && rd16(block + pos * 2) == '=')
+                equals = pos;
+            ++pos;
+        }
+        if (pos == units) {
+            set_last_error(87);
+            set_eax(c, 0);
+            return;
+        }
+        if (equals != UINT32_MAX &&
+            os_strcasecmp(gm_wstr(block + start * 2, equals - start).c_str(), name.c_str()) == 0) {
+            const uint32_t count = pos - equals - 1;
+            if (!out || cap <= count) {
+                set_eax(c, count + 1);
+                return;
+            }
+            if (!gm_valid(out, (count + 1) * 2)) {
+                set_last_error(87);
+                set_eax(c, 0);
+                return;
+            }
+            std::memmove(gm_ptr(out), gm_ptr(block + (equals + 1) * 2), (count + 1) * 2);
+            set_eax(c, count);
+            return;
+        }
+        ++pos;
+    }
+    set_last_error(203);
+    set_eax(c, 0);
+}
+void k_SetEnvironmentVariableW(X86 *c) {
+    const auto name = gm_wstr(arg(c, 0)), value = arg(c, 1) ? gm_wstr(arg(c, 1)) : std::string();
+    const bool ok = win32_set_environment(name, arg(c, 1) ? &value : nullptr);
+    if (!ok)
+        set_last_error(87);
+    set_eax(c, ok ? 1 : 0);
+}
 void k_VerifyVersionInfoW(X86 *c) {
     uint32_t p = arg(c, 0), types = arg(c, 1);
     uint64_t mask = (uint64_t)arg(c, 2) | ((uint64_t)arg(c, 3) << 32);
@@ -1059,6 +1110,8 @@ static const ImportShim g_kernel32_wide[] = {
     {"KERNEL32.dll", "EnumResourceNamesW", 4, k_EnumResourceNamesW},
 
     {"KERNEL32.dll", "GetCommandLineW", 0, k_GetCommandLineW},
+    {"KERNEL32.dll", "GetEnvironmentVariableW", 3, k_GetEnvironmentVariableW},
+    {"KERNEL32.dll", "SetEnvironmentVariableW", 2, k_SetEnvironmentVariableW},
     {"KERNEL32.dll", "GetStartupInfoW", 1, k_GetStartupInfoW},
     {"KERNEL32.dll", "VerifyVersionInfoW", 4, k_VerifyVersionInfoW},
     {"KERNEL32.dll", "VerSetConditionMask", 4, k_VerSetConditionMask},

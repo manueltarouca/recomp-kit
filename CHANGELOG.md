@@ -15,6 +15,7 @@
   28-byte VC8 char/wchar_t basic_string ABI with safe overlapping mutations and
   catchable allocation/length/position errors. Required unsupported CRT imports
   stop with their own name; optional missing export probes still return null.
+  Preserve Unicode argv and environment values across CRT/Win32 wide APIs.
   Discover DLL CRT initializer tables through IAT calls and jump thunks. Fixes #25.
 
 - Handle VC8 C++ throws, typed/reference/value catches, catch copies, nested

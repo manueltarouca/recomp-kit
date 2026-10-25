@@ -41,11 +41,12 @@ uint32_t duplicate(const std::string &s, bool wide = false) {
     const uint32_t p = heap_alloc(uint32_t((s.size() + 1) * (wide ? 2 : 1)), true);
     if (!p)
         fail("cannot allocate startup data");
-    for (uint32_t i = 0; i < s.size(); ++i)
-        if (wide)
-            wr16(p + i * 2, uint8_t(s[i]));
-        else
-            wr8(p + i, uint8_t(s[i]));
+    // The Win32 environment/command-line seam is UTF-8. Decode rather than
+    // widening bytes; byte count is a safe upper bound on UTF-16 units.
+    if (wide)
+        gm_put_wstr(p, s, uint32_t(s.size() + 1));
+    else
+        std::memcpy(gm_ptr(p), s.c_str(), s.size() + 1);
     return p;
 }
 uint16_t classify(uint32_t ch) {
@@ -211,20 +212,12 @@ template <bool Wide = false> void mainargs(X86 *c) {
     wr32(arg(c, 2), rd32(env));
     set_eax(c, 0);
 }
+std::string wide_text(uint32_t p) {
+    return gm_wstr(p, string_length(p, 2, 1u << 20));
+}
 template <bool Wide = false> void getenv_(X86 *c) {
     reset();
-    const auto query = Wide ? wtext(arg(c, 0)) : std::u16string();
-    std::string name;
-    if (Wide)
-        for (auto ch : query) {
-            if (ch > 255) {
-                set_eax(c, 0);
-                return;
-            }
-            name += char(ch);
-        }
-    else
-        name = text(arg(c, 0));
+    std::string name = Wide ? wide_text(arg(c, 0)) : text(arg(c, 0));
     std::transform(name.begin(), name.end(), name.begin(),
                    [](unsigned char ch) { return char(ch >= 'A' && ch <= 'Z' ? ch + 32 : ch); });
     for (const auto &entry : win32_environment()) {
@@ -246,18 +239,7 @@ template <bool Wide = false> void getenv_(X86 *c) {
     set_eax(c, 0);
 }
 template <bool Wide = false> void putenv_(X86 *c) {
-    std::string entry;
-    if (Wide) {
-        for (auto ch : wtext(arg(c, 0))) {
-            if (ch > 255) {
-                set_errno(c, EINVAL_);
-                set_eax(c, UINT32_MAX);
-                return;
-            }
-            entry += char(ch);
-        }
-    } else
-        entry = text(arg(c, 0));
+    const std::string entry = Wide ? wide_text(arg(c, 0)) : text(arg(c, 0));
     const auto eq = entry.find('=');
     if (eq == std::string::npos || !eq) {
         set_errno(c, EINVAL_);

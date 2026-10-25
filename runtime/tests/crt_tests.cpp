@@ -461,12 +461,65 @@ static void thread_tests() {
     CHECK(sched_drive_until_stopped(1.0));
     sched_set_guest_thread(false);
 }
+static void unicode_startup_tests() {
+    os_setenv("RECOMP_GUEST_ARGS", "\"\xc3\xa9\xf0\x9f\x99\x82\"");
+    win32_reset_command_line_for_test();
+    const uint32_t out = heap_alloc(12, true);
+    CHECK(call("__wgetmainargs", {out, out + 4, out + 8, 0, 0}) == 0);
+    CHECK(rd32(out) == 2);
+    const uint32_t argument = rd32(rd32(out + 4) + 4);
+    CHECK(argument && rd16(argument) == 0xe9 && rd16(argument + 2) == 0xd83d &&
+          rd16(argument + 4) == 0xde42 && rd16(argument + 6) == 0);
+    const uint32_t assignment = heap_alloc(128, true), key = heap_alloc(64, true);
+    const std::u16string value = u"CRT_\u00e9=\u00e9\U0001f642", name = u"CRT_\u00e9";
+    for (uint32_t i = 0; i < value.size(); ++i)
+        wr16(assignment + i * 2, value[i]);
+    for (uint32_t i = 0; i < name.size(); ++i)
+        wr16(key + i * 2, name[i]);
+    CHECK(call("_wputenv", {assignment}) == 0);
+    const uint32_t result = call("_wgetenv", {key});
+    CHECK(result && rd16(result) == 0xe9 && rd16(result + 2) == 0xd83d &&
+          rd16(result + 4) == 0xde42 && rd16(result + 6) == 0);
+    const uint32_t narrow = guest_text("CRT_\xc3\xa9"), ansi = call("getenv", {narrow});
+    CHECK(ansi && !std::strcmp((const char *)gm_ptr(ansi), "\xc3\xa9\xf0\x9f\x99\x82"));
+    const uint32_t block = call("GetEnvironmentStringsW", {}, "kernel32.dll");
+    bool found = false;
+    if (block) {
+        const uint64_t limit = uint64_t(block) + heap_size(block);
+        for (uint32_t at = block; uint64_t(at) + 2 <= limit && rd16(at);) {
+            const auto entry = gm_wstr(at);
+            if (entry == "CRT_\xc3\xa9=\xc3\xa9\xf0\x9f\x99\x82")
+                found = true;
+            at += (crt::string_length(at, 2) + 1) * 2;
+        }
+    }
+    CHECK(found);
+    const uint32_t wide_result = heap_alloc(16, true);
+    CHECK(call("GetEnvironmentVariableW", {key, 0, 0}, "kernel32.dll") == 4);
+    CHECK(call("GetEnvironmentVariableW", {key, wide_result, 8}, "kernel32.dll") == 3 &&
+          rd16(wide_result) == 0xe9 && rd16(wide_result + 2) == 0xd83d);
+    wr16(wide_result, 0xf6);
+    wr16(wide_result + 2, 0xd83d);
+    wr16(wide_result + 4, 0xde42);
+    wr16(wide_result + 6, 0);
+    CHECK(call("SetEnvironmentVariableW", {key, wide_result}, "kernel32.dll") == 1);
+    const uint32_t changed = call("_wgetenv", {key});
+    CHECK(changed && rd16(changed) == 0xf6 && rd16(changed + 2) == 0xd83d &&
+          rd16(changed + 4) == 0xde42);
+    heap_free(wide_result);
+    for (auto p : {out, assignment, key, narrow})
+        heap_free(p);
+}
 int main(int argc, char **argv) {
     mem_init();
     imports_init();
     win32_init(".");
     cpu.fs_base = TEB_BASE;
     cpu.r[R_ESP] = STACK_TOP - 4096;
+    if (argc > 1 && !std::strcmp(argv[1], "unicode-startup")) {
+        unicode_startup_tests();
+        return failures ? 1 : 0;
+    }
     if (argc > 1) {
         CHECK(std::freopen(argv[2], "w", stderr));
         const uint32_t scratch = heap_alloc(16, true);
@@ -561,6 +614,11 @@ int main(int argc, char **argv) {
         }
     }
     thread_tests();
+    const char *unicode_args[] = {executable, "unicode-startup", nullptr};
+    int64_t unicode_pid = 0;
+    int unicode_code = -1;
+    CHECK(os_spawn(unicode_args, &unicode_pid) == 0 && os_wait(unicode_pid, &unicode_code) == 0 &&
+          unicode_code == 0);
     mem_shutdown();
     std::printf("CRT: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
