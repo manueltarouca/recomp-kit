@@ -21,6 +21,9 @@
   stall the guest in the driver's allocator. The presenter paces repeats of
   an unchanged frame to the display refresh and reuses composite targets.
 
+- A full-screen 2D image blitted to a 3D device's target before any draw is
+  presented whole, instead of as separately anchored UI pieces.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.

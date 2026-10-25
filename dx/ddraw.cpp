@@ -1041,6 +1041,7 @@ struct Frame {
     HostSurfaceId draw_surface = HOST_SURFACE_NONE;
     bool had_draws = false;
     bool wrote_video = false;
+    bool full_2d = false; // legacy because a draw-less frame repainted the whole target
     HostSurfaceId render_surface = HOST_SURFACE_NONE;
     HostScreenClass cls = HOST_SCREEN_MENU;
     // A palette write changes every pixel on screen without touching one. An
@@ -1078,7 +1079,7 @@ void recycle_frame(Frame &f) {
     f.first_hud_seq = 0xffffffffu;
     f.legacy = false;
     f.draw_surface = f.render_surface = HOST_SURFACE_NONE;
-    f.had_draws = f.wrote_video = f.palette_changed = false;
+    f.had_draws = f.wrote_video = f.palette_changed = f.full_2d = false;
     f.display_palette_version = 0;
 }
 uint64_t g_frame_id = 1;
@@ -1783,6 +1784,11 @@ const HostD3DDrawSnapshot *host_frame_draw(HostFrameHandle f, uint32_t i) {
 void ddraw_note_draw(void) {
     presenter_write();
     Frame &f = current_frame();
+    if (f.full_2d) {
+        // A full-target clear before 3D, not a 2D screen.
+        f.full_2d = false;
+        f.legacy = false;
+    }
     f.had_draws = true;
     g_drew_since_seal = true;
     g_after_first_draw = true;
@@ -2033,6 +2039,18 @@ uint8_t *record_blit(ComObj *dst, const int32_t d[4], const ComObj *src, const i
         classify_screen(f, HOST_SCREEN_FMV);
     } else if (g_device_present)
         classify_screen(f, HOST_SCREEN_GAMEPLAY);
+    // A 2D screen shown while a 3D device exists (the loading screen before
+    // the level selector) repaints the whole target and draws nothing. As
+    // gameplay its pieces became separately anchored HUD elements, which cut
+    // the picture apart; present that frame whole instead. Not sticky: a draw
+    // later in the frame cancels it, and the next frame decides afresh.
+    if (f.cls == HOST_SCREEN_GAMEPLAY && !f.had_draws && !r->is_upload &&
+        surface_is_on_screen(dst) && r->dst_x <= 0 && r->dst_y <= 0 &&
+        int64_t(r->dst_x) + r->w >= int64_t(dst->width) &&
+        int64_t(r->dst_y) + r->h >= int64_t(dst->height)) {
+        f.full_2d = true;
+        f.legacy = true;
+    }
 
     // The palette this record was drawn against, held for as long as the
     // frame is: compositing three palette writes later must not repaint it in
