@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `[controls.native] attached_only = true` to expose the native DirectInput
+  and XInput pad only while a physical controller is connected. It defaults
+  to false, preserving existing virtual-pad behavior. Fixes #14.
+
 - Cut host work in guest polling loops. PeekMessage pumps audio and window
   presents at most once per `RECOMP_PEEK_PUMP_US` (default 1000), a
   GetTickCount spin that sees no time pass sleeps 1 ms cooperatively, and the

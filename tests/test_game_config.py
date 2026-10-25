@@ -218,7 +218,19 @@ class LoadTests(unittest.TestCase):
             cfg = game_config.load(game)
             self.assertEqual(cfg["controls"]["default_layout"], "keys")
             self.assertEqual(cfg["controls"]["pad"], "mapped")
+            self.assertFalse(cfg["controls"]["native"]["attached_only"])
             self.assertEqual(cfg["controls"]["mapped"], game_config.MAPPED_DEFAULTS)
+
+            (game / "game.toml").write_text(
+                base + '\n[controls]\npad = "native"\n[controls.native]\nattached_only = true\n')
+            cfg = game_config.load(game)
+            self.assertTrue(cfg["controls"]["native"]["attached_only"])
+            self.assertIn("#define RECOMP_CONTROLS_NATIVE_ATTACHED_ONLY 1", gen_game_config.render_header(cfg))
+            for invalid in ('"true"', '1', '[]'):
+                (game / "game.toml").write_text(
+                    base + '\n[controls.native]\nattached_only = ' + invalid + '\n')
+                with self.assertRaises(ValueError):
+                    game_config.load(game)
 
             # The old [touch] keypad knob maps onto default_layout when the
             # game names no default_layout of its own.
@@ -254,6 +266,7 @@ class LoadTests(unittest.TestCase):
             (game / "game.toml").write_text(base)
             header = gen_game_config.render_header(game_config.load(game))
             self.assertIn("#define RECOMP_CONTROLS_PAD 1", header)
+            self.assertIn("#define RECOMP_CONTROLS_NATIVE_ATTACHED_ONLY 0", header)
             self.assertIn("cross=mouse_left", header)
 
             # The old rows spelling still loads.

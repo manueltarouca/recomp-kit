@@ -80,6 +80,11 @@ mouse (or, in `native` mode, into the DirectInput joystick and XInput devices
 in `dx/`), the overlay that draws it and the on-device editor. Everything but
 the overlay and the SDL glue is SDL-free and unit-tested in `controls_tests`.
 See `docs/superpowers/specs/2026-09-17-touch-controls-design.md`.
+For native pad mode, `[controls.native] attached_only = true` makes DirectInput
+enumeration and XInput availability follow the physical controller connection.
+The default is false, preserving the always-present virtual pad. Connection
+state is published through the virtual pad's mutex; guest polling never calls
+SDL. A smoke script that uses a pad marks its simulated controller attached.
 `mods/options_menu.cpp` extends the original Options page and queues changes at
 guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choices;
 `mods/settings.cpp` atomically persists host/mod settings in the selected profile.
