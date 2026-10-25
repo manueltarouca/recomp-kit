@@ -139,6 +139,8 @@ enum ComIface : uint16_t {
     // version 8 vtables.
     IF_DINPUT8,
     IF_DINPUTDEVICE8,
+    // IDirectSound8: the DirectSound object through its version 8 vtable.
+    IF_DSOUND8,
     IF_COUNT
 };
 

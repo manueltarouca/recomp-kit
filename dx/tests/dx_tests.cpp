@@ -3192,6 +3192,38 @@ static void test_cocreate_directsound() {
     CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), 0x80040154u); // REGDB_E_CLASSNOTREG
 }
 
+// DirectSound 8 made through COM: CoCreateInstance(CLSID_DirectSound8,
+// IID_IDirectSound8), Initialize, SetCooperativeLevel. IDirectSound8 is
+// IDirectSound plus VerifyCertification; unregistered, a game made this way
+// ran without sound.
+static void test_cocreate_directsound8() {
+    // {3901CC3F-84B5-4FA4-BA35-AA8172B8A09B}, {C50A7E93-F395-4834-9EF6-7FA99DE50966}
+    static const uint8_t clsid_ds8[16] = {0x3f, 0xcc, 0x01, 0x39, 0xb5, 0x84, 0xa4, 0x4f,
+                                          0xba, 0x35, 0xaa, 0x81, 0x72, 0xb8, 0xa0, 0x9b};
+    static const uint8_t iid_ds8[16] = {0x93, 0x7e, 0x0a, 0xc5, 0x95, 0xf3, 0x34, 0x48,
+                                        0x9e, 0xf6, 0x7f, 0xa9, 0x9d, 0xe5, 0x09, 0x66};
+    uint32_t clsid = sc(0x1d00), iid = sc(0x1d10), ppv = sc(0x1d20);
+    memcpy(g_mem + clsid, clsid_ds8, 16);
+    memcpy(g_mem + iid, iid_ds8, 16);
+    wr32(ppv, 0);
+    uint32_t cocreate = tramp("ole32.dll", "CoCreateInstance");
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 3, iid, ppv}), DS_OK);
+    uint32_t ds = rd32(ppv);
+    CHECK(ds != 0);
+    if (!ds)
+        return;
+    CHECK_EQ(call_method(ds, 10, {0}), DS_OK);        // Initialize(NULL)
+    CHECK_EQ(call_method(ds, 6, {0x1234, 2}), DS_OK); // SetCooperativeLevel(PRIORITY)
+    CHECK_EQ(call_method(ds, 11, {0}), DS_OK);        // VerifyCertification
+    // QueryInterface for IID_IDirectSound8 on it answers with the same object.
+    wr32(sc(0x1d30), 0);
+    CHECK_EQ(call_method(ds, 0, {iid, sc(0x1d30)}), DS_OK);
+    CHECK(rd32(sc(0x1d30)) != 0);
+    if (rd32(sc(0x1d30)))
+        call_method(rd32(sc(0x1d30)), 2);
+    call_method(ds, 2);
+}
+
 // ---------------------------------------------------------------------------
 // DirectShow multimedia streaming: the reading side of the API a game uses to
 // pull decoded audio out of a music file and feed its own DirectSound buffer.
@@ -12747,6 +12779,7 @@ int main() {
         {"DC write diff", test_getdc_releasedc},
         {"GDI primary blit", test_gdi_primary_blit},
         {"CoCreateInstance DirectSound", test_cocreate_directsound},
+        {"CoCreateInstance DirectSound 8", test_cocreate_directsound8},
         {"DirectShow audio stream", test_dshow_audio_stream},
         {"DirectShow graph playback", test_dshow_graph_playback},
         {"palette versions", test_palette_versions},
