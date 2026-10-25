@@ -23,6 +23,8 @@
 static uint32_t factory;
 static bool gpu_capture;
 static uint32_t gpu_draws;
+static uint32_t shader_announcements;
+static bool announced_pixel;
 static HostD9Draw captured;
 extern "C" int host_d9_active() {
     return gpu_capture ? 1 : 0;
@@ -30,6 +32,13 @@ extern "C" int host_d9_active() {
 extern "C" void host_d9_draw(const HostD9Draw *draw) {
     captured = *draw;
     ++gpu_draws;
+}
+extern "C" void host_d9_shader_created(const uint8_t *bytes, uint32_t size, uint64_t key,
+                                       int pixel) {
+    ++shader_announcements;
+    announced_pixel = pixel != 0;
+    CHECK(bytes && size && d9sh::code_key(bytes, size) == key);
+    CHECK(d9sh::program_for_key(key, bytes, size).pixel == announced_pixel);
 }
 static uint32_t device() {
     const uint32_t p = sc(0);
@@ -112,6 +121,24 @@ static void lifetime() {
     call_method(dev, 2);
     call_method(vs, 2); // Dropping it breaks the binding/device cycle.
     CHECK(!com_get(dev_id) && !com_get(vs_id));
+}
+static void shader_creation_seam() {
+    const uint32_t dev = device();
+    const uint32_t before = shader_announcements;
+    gpu_capture = false;
+    uint32_t vs = shader(dev, false, code(false));
+    CHECK(vs && shader_announcements == before);
+    call_method(vs, 2);
+    gpu_capture = true;
+    vs = shader(dev, false, code(false));
+    CHECK(vs && shader_announcements == before + 1 && !announced_pixel);
+    const uint32_t ps = shader(dev, true, code(true));
+    CHECK(ps && shader_announcements == before + 2 && announced_pixel);
+    CHECK(!shader(dev, false, code(true)) && shader_announcements == before + 2);
+    call_method(vs, 2);
+    call_method(ps, 2);
+    call_method(dev, 2);
+    gpu_capture = false;
 }
 static void invalid_programs() {
     const uint32_t dev = device();
@@ -305,6 +332,7 @@ int main() {
     cpu_reset();
     factory = call_shim(tramp("d3d9.dll", "Direct3DCreate9"), {32});
     shader_contracts();
+    shader_creation_seam();
     lifetime();
     invalid_programs();
     shader_features();

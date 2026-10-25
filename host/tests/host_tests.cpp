@@ -56,6 +56,7 @@
 
 #include "../gpu/fake/fake_device.h"
 #include "../gpu/gpu_factory.h"
+#include "../gpu/d3d9_warm.h"
 #include "../../dx/host_d9.h"
 #include "../../dx/d3d9_msl.h"
 #include "../../dx/d3d9_shader.h"
@@ -10145,16 +10146,48 @@ int main(int argc, char **argv) {
         return g_failures ? 1 : 0;
     }
     if (argc > 1 && !strcmp(argv[1], "--d3d9-gpu")) {
+        char warm_dir[512];
+        snprintf(warm_dir, sizeof warm_dir, "%s/recomp-warm-XXXXXX", os_temp_dir());
+        CHECK(os_mkdtemp(warm_dir) == 0);
+        os_setenv("RECOMP_PROFILE_DIR", warm_dir);
+        os_setenv("RECOMP_D3D9_WARM", "1");
         g_gpu = gpu::create_default_device();
         if (!g_gpu || !host_d9_use_device_for_test(g_gpu.get())) {
             printf("no Metal device: Direct3D 9 GPU test did not run\n");
             return 2;
         }
-        test_d3d9_gpu_renderer();
-        test_d3d9_ps11_texm3x2();
-        test_d3d8_fixed_gpu();
-        test_d3d9_instancing_gpu();
-        test_d3d9_sm3_gpu();
+        auto render = [] {
+            test_d3d9_gpu_renderer();
+            test_d3d9_ps11_texm3x2();
+            test_d3d8_fixed_gpu();
+            test_d3d9_instancing_gpu();
+            test_d3d9_sm3_gpu();
+        };
+        render();
+        host_d9_use_device_for_test(nullptr); // join warm work and flush all hints
+        if (!strcmp(gpu::default_backend_name(), "metal")) {
+            d9warm::Hints hints(warm_dir);
+            hints.load();
+            CHECK(!hints.shaders().empty() && !hints.pipelines().empty());
+            for (auto hint : hints.pipelines()) {
+                std::swap(hint.vertex, hint.pixel); // valid line, wrong live shader roles
+                hints.remember(hint);
+                std::swap(hint.vertex, hint.pixel);
+                hint.colors[0] = 8191; // parsed, but never sent to Metal as a pixel format
+                hints.remember(hint);
+            }
+            CHECK(hints.flush());
+            CHECK(host_d9_use_device_for_test(g_gpu.get()));
+            render(); // same pixels with saved pipelines and irrelevant stale work
+            host_d9_use_device_for_test(nullptr);
+            os_setenv("RECOMP_D3D9_WARM", "0");
+            CHECK(host_d9_use_device_for_test(g_gpu.get()));
+            render();
+            host_d9_use_device_for_test(nullptr);
+        }
+        os_unsetenv("RECOMP_D3D9_WARM");
+        os_unsetenv("RECOMP_PROFILE_DIR");
+        std::filesystem::remove_all(warm_dir);
         printf("d3d9 GPU: %d checks, %d failures\n", g_checks, g_failures);
         return g_failures ? 1 : 0;
     }

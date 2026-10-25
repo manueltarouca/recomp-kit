@@ -174,7 +174,7 @@ set(POP_PRESENT_SOURCES ${HOST}/present_pixels.cpp ${HOST}/present_thread.cpp ${
                         ${HOST}/indexed_frame.cpp)
 # The Direct3D 9 device's GPU renderer: the host entry points, and a backend
 # per GPU API (host/gpu/d3d9_backend.h). Without one the shim draws on the CPU.
-list(APPEND POP_PRESENT_SOURCES ${HOST}/gpu/d3d9_host.cpp)
+list(APPEND POP_PRESENT_SOURCES ${HOST}/gpu/d3d9_host.cpp ${HOST}/gpu/d3d9_warm.cpp)
 if(RECOMP_D9_VULKAN)
   list(APPEND POP_PRESENT_SOURCES ${HOST}/gpu/vulkan/d3d9_vulkan.cpp)
   set_source_files_properties(${HOST}/gpu/d3d9_host.cpp PROPERTIES COMPILE_DEFINITIONS RECOMP_D9_VULKAN=1)

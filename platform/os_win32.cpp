@@ -208,6 +208,7 @@ void *os_guest_arena_reserve(size_t bytes) {
 void os_guest_arena_release(void *p, size_t bytes) {
     os_vm_release(p, bytes);
 }
+void os_thread_prefer_user_initiated(void) {}
 
 int os_realpath(const char *path, char *out, size_t cap) {
     HANDLE file =

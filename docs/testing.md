@@ -1,5 +1,12 @@
 # Testing
 
+`d3d9_warm_tests` checks queued takeover, concurrent builders/waiters,
+abandonment during failure/unwind, pool shutdown, canonical pipeline inputs,
+bounded hint parsing, file damage recovery and concurrent atomic rewrites.
+The D3D9 device suite checks that shader creation announces both GPU programs,
+and does not announce CPU-only or refused shaders. Metal readback tests repeat
+with saved, stale and swapped-role hints and with warming disabled.
+
 `d3d9_device_tests` checks shader bytecode bounds, immutable copies, COM
 binding/device lifetimes, GetFunction/GetDevice, creation parameters and
 CPU instancing across streams 1-7 with dividers one and two. It also checks

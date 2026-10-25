@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Warm accepted D3D9 shaders and saved pipeline descriptions on two Metal
+  workers, with one build shared by workers and first-use draws. Keep validated
+  session hints in the profile through atomic whole-file replacement, recover
+  damaged lines, and ignore stale shader roles. Canonical pipeline keys avoid
+  redundant declaration ids and inactive alpha state. Add warm-up and slow-frame
+  compile diagnostics; `RECOMP_D3D9_WARM=0` disables warming. Fixes #33.
+
 - Implement Direct3D 9 shader objects with bounded bytecode copies, shared
   binding storage, GetFunction/GetDevice and reference-safe teardown. Return
   device creation parameters and retain per-stream instance frequencies.

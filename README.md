@@ -251,6 +251,13 @@ copying them beside the executable. The build host needs a POSIX shell and GNU
 make; MSYS2 is only required when building on Windows itself. Translated app
 packages, including the DLLs and their notice, land in `build/windows/package/`.
 
+Metal prepares accepted D3D9 programs on two background workers. It records
+shader variants and pipeline descriptions in `<RECOMP_PROFILE_DIR>/d3d9-warm.txt`
+for subsequent sessions. `RECOMP_D3D9_WARM=0` disables preparation and hints;
+`RECOMP_D3D9_STATS=1` reports builds, takeovers and waits. With `RECOMP_PROFILE=1`,
+frames over 100 ms also report compile work, GPU waits, texture creation,
+uploads and draws. Background compile time can overlap a frame.
+
 ## Check a change
 
 ```sh

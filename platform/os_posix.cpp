@@ -95,6 +95,11 @@ void os_thread_prefer_performance(void) {
 void os_thread_exit(void) {
     pthread_exit(nullptr);
 }
+void os_thread_prefer_user_initiated(void) {
+#ifdef __APPLE__
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+#endif
+}
 OsThreadId os_thread_self(void) {
     return (OsThreadId)(uintptr_t)pthread_self();
 }

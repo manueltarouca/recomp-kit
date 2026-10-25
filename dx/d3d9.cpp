@@ -580,6 +580,13 @@ static void create_shader(X86 *c, bool pixel) {
         return;
     }
     wr32(out, view);
+    if (host_d9_active()) {
+        const auto &program =
+            d9sh::program_for_key(shader->d9_shader_key, shader->d9_shader->data(), bytes);
+        if (program.ok)
+            host_d9_shader_created(shader->d9_shader->data(), uint32_t(bytes),
+                                   shader->d9_shader_key, pixel);
+    }
     com_ret(c, D3D_OK9);
 }
 static void set_shader(X86 *c, bool pixel) {

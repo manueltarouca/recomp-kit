@@ -117,6 +117,8 @@ typedef struct HostD9Draw {
 } HostD9Draw;
 
 void host_d9_draw(const HostD9Draw *draw);
+// Accepted, decoded programs only. The host consumes the bytes during this call.
+void host_d9_shader_created(const uint8_t *bytes, uint32_t size, uint64_t key, int pixel);
 
 // D3DCLEAR_TARGET 1, _ZBUFFER 2, _STENCIL 4. Rects are D3DRECTs.
 void host_d9_clear(const HostD9Target *target, const int32_t viewport[4], uint32_t count,
