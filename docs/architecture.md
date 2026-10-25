@@ -91,6 +91,15 @@ guest-safe boundaries. `mods/game_settings.cpp` persists original graphics choic
 
 ## Discovery, and code a build does not carry
 
+Hardware probes use `[system] desktop = "1024x768"` and `memory_mb = 512`
+by default. The desktop is shared by USER32, GDI and D3D9 until a selected
+display mode takes over. `[d3d9.adapter]` accepts `vendor_id`, `device_id`,
+`description` and `video_memory_mb`. Defaults remain the GeForce 7800 GTX
+(0x10de/0x0091) and DirectDraw's 32 MB; D3D texture memory has a 256 MB floor.
+Memory is reported consistently by the legacy and 64-bit memory structures;
+legacy 32-bit totals saturate at UINT32_MAX. D3D9 enumerates 17 X8R8G8B8
+modes from 640x480 to 2560x1600 at 60 Hz.
+
 A port can audit its CRT pair and set `[translate] intrinsics` to a table
 containing `setjmp` and `longjmp` guest addresses. These replace both CRT
 bodies with runtime intrinsics and remove alternate entries inside them.

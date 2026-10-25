@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Let ports configure desktop size and physical memory in `[system]`, and
+  GPU identity/video memory in `[d3d9.adapter]`. Direct3D 9 lists 17 display
+  modes and rejects invalid enumeration indices. USER32, GDI and D3D9
+  share the desktop mode; DirectDraw reports configured video memory while
+  D3D texture memory retains a 256 MB floor. Fixes #36.
+
 - Correct CPU Direct3D 9 depth testing and clears, integer pixel centres,
   shared-edge fill, alpha comparisons, blending and color masks. Point and
   linear sampling respect clamp, mirror, mirror-once and border colors;

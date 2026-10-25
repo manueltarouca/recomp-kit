@@ -55,6 +55,14 @@ def render_header(cfg):
     lines.append("#define RECOMP_CONTROLS_DEFAULT_LAYOUT %s" % c_string(controls["default_layout"]))
     lines.append("#define RECOMP_CONTROLS_PAD %d" % ("off", "mapped", "native").index(controls["pad"]))
     lines.append("#define RECOMP_MM_TIMER_THREAD %d" % (cfg["system"]["mm_timers"] == "thread"))
+    width, height = map(int, cfg["system"]["desktop"].split("x"))
+    lines.append("#define RECOMP_DESKTOP_WIDTH %du" % width)
+    lines.append("#define RECOMP_DESKTOP_HEIGHT %du" % height)
+    lines.append("#define RECOMP_MEMORY_MB %du" % cfg["system"]["memory_mb"])
+    adapter = cfg["d3d9"]["adapter"]
+    for key in ("vendor_id", "device_id", "video_memory_mb"):
+        lines.append("#define RECOMP_ADAPTER_%s %du" % (key.upper(), adapter[key]))
+    lines.append("#define RECOMP_ADAPTER_DESCRIPTION %s" % c_string(adapter["description"]))
     lines.append("#define RECOMP_CONTROLS_MAPPED %s" % c_string(
         ";".join("%s=%s" % (k, controls["mapped"][k]) for k in sorted(controls["mapped"]))))
     native = controls["native"]

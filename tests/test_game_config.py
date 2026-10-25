@@ -20,6 +20,44 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_hardware_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text(encoding="utf-8")
+            (game / "globals.toml").write_text("", encoding="utf-8")
+            settings = ('\n[system]\ndesktop = "1920x1080"\nmemory_mb = 8192\n'
+                        '[d3d9.adapter]\nvendor_id = 4098\ndevice_id = 123\n'
+                        'description = "Test \\"GPU\\""\nvideo_memory_mb = 1024\n')
+            # TOML string quoting remains intentional, including the embedded quotes.
+            (game / "game.toml").write_text(stub + settings, encoding="utf-8")
+            cfg = game_config.load(game)
+            header = gen_game_config.render_header(cfg)
+            for macro, value in (("DESKTOP_WIDTH", 1920), ("DESKTOP_HEIGHT", 1080),
+                                 ("MEMORY_MB", 8192), ("ADAPTER_VENDOR_ID", 4098),
+                                 ("ADAPTER_DEVICE_ID", 123), ("ADAPTER_VIDEO_MEMORY_MB", 1024)):
+                self.assertIn("#define RECOMP_%s %du" % (macro, value), header)
+            self.assertIn('"Test \\"GPU\\""', header)
+            defaults = game_config.load(ROOT / "games/stub")
+            self.assertEqual(defaults["system"]["desktop"], "1024x768")
+            self.assertEqual(defaults["system"]["memory_mb"], 512)
+            self.assertEqual(defaults["d3d9"]["adapter"]["video_memory_mb"], 32)
+
+    def test_hardware_configuration_rejects_invalid_values(self):
+        cases = [("system", "desktop", v) for v in ('"0x768"', '"1024x20000"', '"1024X768"', 'true')]
+        cases += [("system", "memory_mb", v) for v in ('0', '-1', 'true', '1.5', '1048577')]
+        for key in ("vendor_id", "device_id", "video_memory_mb"):
+            cases += [("d3d9.adapter", key, v) for v in ('-1', 'true', '65536', '"123"')]
+        cases += [("d3d9.adapter", "description", v) for v in ('""', '42', '"bad\\nname"')]
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text(encoding="utf-8")
+            (game / "globals.toml").write_text("", encoding="utf-8")
+            for table, key, value in cases:
+                with self.subTest(table=table, key=key, value=value):
+                    (game / "game.toml").write_text(stub + '\n[%s]\n%s = %s\n' % (table, key, value), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, key):
+                        game_config.load(game)
+
     def test_cd_tracks_preserve_disc_order_and_reject_non_strings(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

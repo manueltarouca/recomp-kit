@@ -156,6 +156,25 @@ def load(game_dir):
     system = cfg.setdefault("system", {})
     if system.setdefault("mm_timers", "message_loop") not in ("message_loop", "thread"):
         raise ValueError('%s: [system] mm_timers must be "message_loop" or "thread"' % source)
+    desktop = system.setdefault("desktop", "1024x768")
+    if (not isinstance(desktop, str) or not re.fullmatch(r"[0-9]+x[0-9]+", desktop)
+            or any(not 1 <= int(v) <= 16384 for v in desktop.split("x"))):
+        raise ValueError('%s: [system] desktop must be WIDTHxHEIGHT, each between 1 and 16384' % source)
+    memory = system.setdefault("memory_mb", 512)
+    if type(memory) is not int or not 1 <= memory <= 1048576:
+        raise ValueError('%s: [system] memory_mb must be an integer between 1 and 1048576' % source)
+    adapter = cfg.setdefault("d3d9", {}).setdefault("adapter", {})
+    if not isinstance(adapter, dict):
+        raise ValueError('%s: [d3d9] adapter must be a table' % source)
+    for key, default, limit in (("vendor_id", 0x10de, 0xffff), ("device_id", 0x0091, 0xffff),
+                                ("video_memory_mb", 32, 4095)):
+        value = adapter.setdefault(key, default)
+        if type(value) is not int or not (1 if key == "video_memory_mb" else 0) <= value <= limit:
+            raise ValueError('%s: [d3d9.adapter] %s must be an integer in range' % (source, key))
+    description = adapter.setdefault("description", "NVIDIA GeForce 7800 GTX")
+    if (not isinstance(description, str) or not description or len(description.encode("utf-8")) > 511
+            or any(ord(c) < 32 for c in description)):
+        raise ValueError('%s: [d3d9.adapter] description must be 1..511 UTF-8 bytes without control characters' % source)
     translate = cfg.setdefault("translate", {})
     intrinsics = translate.get("intrinsics")
     if intrinsics is not None:

@@ -19,6 +19,8 @@
 #include "dx.h"
 #include "../runtime/guest.h"
 #include "../runtime/memory.h"
+#include "../runtime/win32.h"
+#include "game_config.h"
 #include "host_api.h"
 #include "d3d9_pipeline.h"
 #include "d3d9_raster.h"
@@ -159,57 +161,73 @@ void D9_GetAdapterCount(X86 *c) {
 // driver version, four ids, the identifier GUID and the WHQL level.
 void D9_GetAdapterIdentifier(X86 *c) {
     uint32_t out = arg(c, 3);
-    if (!out) {
+    ComObj *factory = this_d3d9(c);
+    const bool version8 = factory && factory->d3d_version == 8;
+    if (arg(c, 1) || !out || !gm_fits(out, version8 ? 1068 : 1100)) {
         com_ret(c, D3DERR_INVALIDCALL);
         return;
     }
-    ComObj *factory = this_d3d9(c);
-    const bool version8 = factory && factory->d3d_version == 8;
     memset(gm_ptr(out), 0, version8 ? 1068 : 1100);
     // Games of this era pick their feature set by vendor and device id, and
     // turn off whatever they do not recognise (Most Wanted offers shadows
     // only on NVIDIA and ATI). The renderer covers what a GeForce 7800 GTX
     // offered, hardware shadow maps included, so that is the card it names.
     gm_put_str(out, "nv4_disp.dll", 512);
-    gm_put_str(out + 512, "NVIDIA GeForce 7800 GTX", 512);
+    gm_put_str(out + 512, RECOMP_ADAPTER_DESCRIPTION, 512);
     if (!version8)
         gm_put_str(out + 1024, "\\\\.\\DISPLAY1", 32);
     // Driver[512], Description[512], DeviceName[32], then:
     const uint32_t at = out + (version8 ? 1024 : 1056);
     wr32(at, 0x000a249b); // DriverVersion 6.14.10.9371 (low, high)
     wr32(at + 4, 0x0006000e);
-    wr32(at + 8, 0x10de);  // VendorId
-    wr32(at + 12, 0x0091); // DeviceId
-    wr32(at + 20, 0xa1);   // Revision
-    wr32(at + 40, 1);      // WHQLLevel: certified
+    wr32(at + 8, RECOMP_ADAPTER_VENDOR_ID);
+    wr32(at + 12, RECOMP_ADAPTER_DEVICE_ID);
+    wr32(at + 20, 0xa1); // Revision
+    wr32(at + 40, 1);    // WHQLLevel: certified
     com_ret(c, D3D_OK9);
 }
 
+static constexpr uint32_t adapter_modes[][2] = {
+    {640, 480},  {800, 600},   {1024, 768},  {1152, 864},  {1280, 720}, {1280, 768},
+    {1280, 800}, {1280, 960},  {1280, 1024}, {1360, 768},  {1366, 768}, {1440, 900},
+    {1600, 900}, {1600, 1200}, {1680, 1050}, {1920, 1080}, {2560, 1600}};
 void D9_GetAdapterModeCount(X86 *c) {
-    set_eax(c, 1);
+    ComObj *factory = this_d3d9(c);
+    const bool version8 = factory && factory->d3d_version == 8;
+    set_eax(c, arg(c, 1) || (!version8 && arg(c, 2) != 22) ? 0
+               : version8                                  ? 1
+                                                           : uint32_t(std::size(adapter_modes)));
 }
 
 // D3DDISPLAYMODE: width, height, refresh rate, format. X8R8G8B8 is 22.
-static void put_display_mode(uint32_t p) {
-    if (!p)
-        return;
-    wr32(p + 0, 1280);
-    wr32(p + 4, 960);
+static void put_display_mode(uint32_t p, uint32_t w, uint32_t h) {
+    wr32(p + 0, w);
+    wr32(p + 4, h);
     wr32(p + 8, 60);
     wr32(p + 12, 22);
 }
 void D9_EnumAdapterModes(X86 *c) {
     ComObj *factory = this_d3d9(c);
     const bool version8 = factory && factory->d3d_version == 8;
-    if (version8 && arg(c, 2)) {
+    const uint32_t index = arg(c, version8 ? 2 : 3), out = arg(c, version8 ? 3 : 4);
+    if (arg(c, 1) || !out || !gm_fits(out, 16) ||
+        (version8 ? index != 0 : arg(c, 2) != 22 || index >= std::size(adapter_modes))) {
         com_ret(c, D3DERR_INVALIDCALL);
         return;
     }
-    put_display_mode(arg(c, version8 ? 3 : 4));
+    put_display_mode(out, version8 ? 1280 : adapter_modes[index][0],
+                     version8 ? 960 : adapter_modes[index][1]);
     com_ret(c, D3D_OK9);
 }
 void D9_GetAdapterDisplayMode(X86 *c) {
-    put_display_mode(arg(c, 2));
+    const uint32_t out = arg(c, 2);
+    if (arg(c, 1) || !out || !gm_fits(out, 16)) {
+        com_ret(c, D3DERR_INVALIDCALL);
+        return;
+    }
+    uint32_t w, h, bpp;
+    win32_display_mode(&w, &h, &bpp);
+    put_display_mode(out, w, h);
     com_ret(c, D3D_OK9);
 }
 void D9_CheckDeviceType(X86 *c) {
@@ -576,7 +594,7 @@ void Dev_TestCooperativeLevel(X86 *c) {
     com_ret(c, this_device9(c) ? D3D_OK9 : D3DERR_INVALIDCALL);
 }
 void Dev_GetAvailableTextureMem(X86 *c) {
-    set_eax(c, 256u * 1024u * 1024u);
+    set_eax(c, std::max(256u, RECOMP_ADAPTER_VIDEO_MEMORY_MB) * 1024u * 1024u);
 }
 void Dev_GetNumberOfSwapChains(X86 *c) {
     set_eax(c, 1);

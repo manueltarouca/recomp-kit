@@ -3983,15 +3983,16 @@ void k_GetLogicalDrives(X86 *c) {
 
 void k_GlobalMemoryStatus(X86 *c) {
     uint32_t p = arg(c, 0);
-    if (!p)
+    if (!p || !gm_valid(p, 32))
         return;
-    const uint32_t mb = 1024u * 1024u;
-    wr32(p + 0, 32);           // dwLength
-    wr32(p + 4, 25);           // dwMemoryLoad, percent
-    wr32(p + 8, 512u * mb);    // dwTotalPhys
-    wr32(p + 12, 384u * mb);   // dwAvailPhys
-    wr32(p + 16, 1024u * mb);  // dwTotalPageFile
-    wr32(p + 20, 768u * mb);   // dwAvailPageFile
+    const uint64_t total = uint64_t(RECOMP_MEMORY_MB) * 1024 * 1024;
+    auto narrow = [](uint64_t value) { return uint32_t(std::min(value, uint64_t(UINT32_MAX))); };
+    wr32(p + 0, 32); // dwLength
+    wr32(p + 4, 25); // dwMemoryLoad, percent
+    wr32(p + 8, narrow(total));
+    wr32(p + 12, narrow(total * 3 / 4));
+    wr32(p + 16, narrow(total * 2));
+    wr32(p + 20, narrow(total * 3 / 2));
     wr32(p + 24, 0x7ffe0000u); // dwTotalVirtual
     wr32(p + 28, 0x60000000u); // dwAvailVirtual
 }
@@ -4734,22 +4735,23 @@ void k_GetSystemTimeAsFileTime(X86 *c) {
 // structure is 64 bytes and each value is written as a pair of dwords.
 void k_GlobalMemoryStatusEx(X86 *c) {
     uint32_t p = arg(c, 0);
-    if (!p) {
+    if (!p || !gm_valid(p, 64) || rd32(p) != 64) {
         set_last_error(87 /* ERROR_INVALID_PARAMETER */);
         set_eax(c, 0);
         return;
     }
     const uint64_t mb = 1024ull * 1024ull;
+    const uint64_t total = uint64_t(RECOMP_MEMORY_MB) * mb;
     auto put64 = [&](uint32_t off, uint64_t v) {
         wr32(p + off, (uint32_t)v);
         wr32(p + off + 4, (uint32_t)(v >> 32));
     };
-    wr32(p + 0, 64);         // dwLength
-    wr32(p + 4, 25);         // dwMemoryLoad, percent
-    put64(8, 512ull * mb);   // ullTotalPhys
-    put64(16, 384ull * mb);  // ullAvailPhys
-    put64(24, 1024ull * mb); // ullTotalPageFile
-    put64(32, 768ull * mb);  // ullAvailPageFile
+    wr32(p + 0, 64); // dwLength
+    wr32(p + 4, 25); // dwMemoryLoad, percent
+    put64(8, total);
+    put64(16, total * 3 / 4);
+    put64(24, total * 2);
+    put64(32, total * 3 / 2);
     put64(40, 2047ull * mb); // ullTotalVirtual: a 32-bit process's 2 GB
     put64(48, 1900ull * mb); // ullAvailVirtual
     put64(56, 0);            // ullAvailExtendedVirtual is always zero
