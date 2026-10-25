@@ -586,6 +586,13 @@ void typeinfo_vtable(uint32_t table) {
 } // namespace
 
 extern "C" {
+void recomp_msvc_throw(X86 *c, uint32_t object, uint32_t info) {
+    if (state.unwinding)
+        fail("throw during exception copy or unwinding destructor terminates");
+    memory(object, 1, "null exception object");
+    memory(info, 16, "invalid ThrowInfo");
+    dispatch(c, new Exception{object, info});
+}
 jmp_buf *recomp_msvc_frame_enter(X86 *c, uint32_t handler, uint32_t info) {
     const uint32_t reg = head(c);
     registration(c, reg);

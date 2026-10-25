@@ -1,5 +1,6 @@
 #include "imports.h"
 #include "msvc_eh.h"
+#include "crt_internal.h"
 #include "gdi32_internal.h"
 #include "user32_internal.h"
 #include "kernel32_internal.h"
@@ -19,6 +20,7 @@ void sched_checkpoint();
 #include <algorithm>
 
 namespace {
+thread_local uint32_t current_import_target = 0;
 
 struct Tramp {
     std::string dll;
@@ -163,6 +165,13 @@ uint32_t imports_alloc_trampoline(const char *dll, const char *name, void (*fn)(
     }
     if (t.argc == ARGC_UNKNOWN)
         t.argc = decorated_stdcall_args(name);
+    if (!t.fn) {
+        ImportShim fallback{};
+        if (crt_import_fallback(dll, name, &fallback)) {
+            t.fn = fallback.fn;
+            t.argc = fallback.argc_stdcall;
+        }
+    }
 
     uint32_t idx = (uint32_t)tramps().size();
     if (idx >= TRAMP_MAX) {
@@ -249,8 +258,11 @@ uint32_t imports_resolve(const char *dll, const char *name) {
     if (a)
         return a;
     auto ri = registry().find(key_of(dll, name));
-    if (ri == registry().end())
+    if (ri == registry().end()) {
+        // Optional GetProcAddress probes still report absent exports. The
+        // loader's required IAT imports receive named CRT traps at allocation.
         return 0;
+    }
     return imports_alloc_trampoline(ri->second.dll, ri->second.name, ri->second.fn,
                                     ri->second.argc_stdcall);
 }
@@ -262,7 +274,8 @@ bool imports_serves_module(const char *dll) {
     // Including '!' makes the prefix match the complete module name only.
     std::string prefix = key_of(dll, nullptr);
     auto it = registry().lower_bound(prefix);
-    return it != registry().end() && it->first.compare(0, prefix.size(), prefix) == 0;
+    return (it != registry().end() && it->first.compare(0, prefix.size(), prefix) == 0) ||
+           crt_import_fallback(dll, nullptr, nullptr);
 }
 
 const char *imports_describe(uint32_t target) {
@@ -272,6 +285,9 @@ const char *imports_describe(uint32_t target) {
     if (idx >= tramps().size())
         return nullptr;
     return tramps()[idx].desc.c_str();
+}
+const char *imports_current_description() {
+    return imports_describe(current_import_target);
 }
 
 uint8_t imports_argc(uint32_t trampoline) {
@@ -487,6 +503,8 @@ bool imports_dispatch(X86 *c, uint32_t target) {
         }
     }
 
+    const uint32_t previous_import = current_import_target;
+    current_import_target = target;
     if (skip) {
         // The observer refused the call and has set the result itself.
     } else if (fn) {
@@ -499,6 +517,7 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     if (g_return_observer)
         g_return_observer(desc, c->r[R_EAX]);
     LOGV("<- %s (eax=%08x)", desc, c->r[R_EAX]);
+    current_import_target = previous_import;
 
     uint32_t pop = 4;
     if (argc == ARGC_CDECL) {
@@ -617,6 +636,7 @@ void imports_init() {
     misc_dlls_register();
     extern void msvc_eh_register();
     msvc_eh_register();
+    crt_register();
     comctl32_register();
     media_foundation_register();
     imports_register(g_user32_shims, g_user32_shim_count);

@@ -1,4 +1,5 @@
 #include "seh.h"
+#include "crt_internal.h"
 #include "profile.h"
 #include "game_config.h"
 #include "guest_layout.h"
@@ -77,6 +78,7 @@ uint32_t g_unhandled_filter = 0;
 uint32_t g_cmdline_addr = 0;
 uint32_t g_envblock_addr = 0;
 uint32_t g_envblockw_addr = 0;
+std::map<std::string, std::pair<std::string, std::string>> g_env_overrides;
 bool g_tls_used[TLS_SLOTS] = {false};
 uint32_t g_process_heap = 0;
 
@@ -563,6 +565,7 @@ void win32_init_layout(const std::string &game_dir, const std::string &exe_dir) 
     g_cmdline_addr = 0;
     g_envblock_addr = 0;
     g_envblockw_addr = 0;
+    g_env_overrides.clear();
     for (uint32_t i = 0; i < TLS_SLOTS; ++i)
         g_tls_used[i] = false;
     handles().clear();
@@ -1437,9 +1440,20 @@ namespace {
 // The environment block is a run of NUL-terminated strings ended by an extra
 // NUL. GetEnvironmentStringsW must hand back UTF-16, not the ANSI bytes.
 static std::vector<std::string> environment() {
-    return {"PATH=" + g_guest_exe_dir +
-                (g_guest_exe_dir == RECOMP_GUEST_ROOT ? "" : ";" RECOMP_GUEST_ROOT),
-            "windir=C:\\WINDOWS"};
+    std::vector<std::string> result = {
+        "PATH=" + g_guest_exe_dir +
+            (g_guest_exe_dir == RECOMP_GUEST_ROOT ? "" : ";" RECOMP_GUEST_ROOT),
+        "windir=C:\\WINDOWS"};
+    for (const auto &[key, entry] : g_env_overrides) {
+        result.erase(std::remove_if(result.begin(), result.end(),
+                                    [&](const std::string &s) {
+                                        return lower(s.substr(0, s.find('='))) == key;
+                                    }),
+                     result.end());
+        if (!entry.second.empty())
+            result.push_back(entry.first + '=' + entry.second);
+    }
+    return result;
 }
 
 void k_GetEnvironmentStrings(X86 *c) {
@@ -1485,7 +1499,8 @@ void k_FreeEnvironmentStrings(X86 *c) {
     set_eax(c, 1);
 }
 void k_SetEnvironmentVariableA(X86 *c) {
-    set_eax(c, 1);
+    const std::string name = gm_str(arg(c, 0)), value = arg(c, 1) ? gm_str(arg(c, 1)) : "";
+    set_eax(c, win32_set_environment(name, arg(c, 1) ? &value : nullptr) ? 1 : 0);
 }
 
 void k_GetStartupInfoA(X86 *c) {
@@ -3205,6 +3220,7 @@ void thread_run_exit_cleanup(GuestThread *t) {
     recomp_profile_truncate(0);
     if (g_thread_exit_observer)
         g_thread_exit_observer();
+    crt::thread_detach(t->teb);
     // Last, so that mod code running in the unwind or the observer still sees
     // a guest thread holding the baton, which is what it is.
     t_is_guest = false;
@@ -4882,6 +4898,18 @@ void get_command_line(X86 *c) {
         g_cmdline_addr = guest_strdup(line.c_str());
     }
     set_eax(c, g_cmdline_addr);
+}
+std::vector<std::string> win32_environment() {
+    return environment();
+}
+bool win32_set_environment(const std::string &name, const std::string *value) {
+    if (name.empty() || name.find('=') != std::string::npos)
+        return false;
+    g_env_overrides[lower(name)] = {name, value ? *value : ""};
+    // Existing GetEnvironmentStrings blocks remain valid until their caller
+    // releases them; future queries see a fresh snapshot.
+    g_envblock_addr = g_envblockw_addr = 0;
+    return true;
 }
 
 void startup_info(X86 *c) {

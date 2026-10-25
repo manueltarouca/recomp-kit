@@ -610,6 +610,9 @@ int os_gmtime(int64_t seconds, struct tm *out) {
     __time64_t t = (__time64_t)seconds;
     return _gmtime64_s(out, &t) == 0 ? 0 : -1;
 }
+int64_t os_mktime(struct tm *inout) {
+    return _mktime64(inout);
+}
 
 uint64_t os_monotonic_ns(void) {
     static LARGE_INTEGER freq = {};

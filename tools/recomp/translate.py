@@ -1421,7 +1421,23 @@ class Image(object):
         alignment, padding, string or shape test gets a say.
         """
         walkers = set()
+        def imported_walker(ins):
+            if not ins.ops:
+                return False
+            try:
+                op = parse_operand(ins.ops[0])
+            except TranslateError:
+                return False
+            return (op.kind == "mem" and op.base is None and op.index is None
+                    and getattr(self, "iat_names", {}).get(op.disp)
+                    in {"_initterm", "_initterm_e"})
+
         for fn in functions:
+            # DLL-linked CRTs expose the same walker through a pure IAT jump
+            # thunk. Do not infer a walker from an arbitrary indirect jump.
+            body = [ins for ins in fn.insns if ins.mnem != "NOP"]
+            if len(body) == 1 and body[0].mnem == "JMP" and imported_walker(body[0]):
+                walkers.add(fn.addr)
             # The shape, not one compiler's register allocation. __initterm
             # walks an array of function pointers and calls each non-null one,
             # which is an indirect CALL and a step of four however the
@@ -1444,15 +1460,14 @@ class Image(object):
                     step = True
             if indirect_call and step:
                 walkers.add(fn.addr)
-        if not walkers:
-            return [], set()
-
         ranges, entries = [], set()
         for fn in functions:
             for i, ins in enumerate(fn.insns):
                 if ins.mnem != "CALL" or not ins.ops:
                     continue
-                if not ins.ops[0].startswith("0x") or int(ins.ops[0], 16) not in walkers:
+                through_thunk = (ins.ops[0].startswith("0x")
+                                 and int(ins.ops[0], 16) in walkers)
+                if not through_thunk and not imported_walker(ins):
                     continue
                 if i < 2 or fn.insns[i - 1].mnem != "PUSH" or fn.insns[i - 2].mnem != "PUSH":
                     continue

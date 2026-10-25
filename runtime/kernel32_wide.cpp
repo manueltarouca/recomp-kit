@@ -1130,6 +1130,9 @@ static const ImportShim g_kernel32_wide[] = {
 void kernel32_wide_register() {
     imports_register(g_kernel32_wide, sizeof g_kernel32_wide / sizeof g_kernel32_wide[0]);
 }
+void get_command_line_w(X86 *c) {
+    k_GetCommandLineW(c);
+}
 
 void kernel32_wide_reset() {
     g_thread_lcid = 0x0409;

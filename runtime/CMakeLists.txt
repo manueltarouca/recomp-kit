@@ -1,7 +1,7 @@
 # The guest runtime. Object libraries, so every source is linked into every
 # consumer exactly as the shell scripts linked every object.
 set(POP_RUNTIME_SOURCES
-  memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp msvc_eh.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
+  memory.cpp loader.cpp imports.cpp cpu.cpp thunks.cpp seh.cpp msvc_eh.cpp crt_core.cpp crt_strings.cpp crt_math.cpp crt_stdio.cpp crt_startup.cpp crt_cpp.cpp profile.cpp kernel32.cpp kernel32_wide.cpp
   resources.cpp oleaut32.cpp mods_seam.cpp user32.cpp user32_wide.cpp user32_vcl.cpp user32_static.cpp
   misc.cpp misc_dlls.cpp comctl32.cpp gdi32.cpp gdi32_draw.cpp gdi32_text.cpp gdi32_truetype.cpp msimg32.cpp
   media_foundation.cpp layout.cpp interp.cpp discovery.cpp)
@@ -121,6 +121,13 @@ add_test(NAME seh_tests COMMAND seh_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(seh_tests PROPERTIES LABELS nogame ENVIRONMENT RECOMP_PROFILE=1)
 
 add_executable(runtime_tests tests/runtime_tests.cpp tests/stub_recomp_call.cpp)
+add_executable(crt_tests tests/crt_tests.cpp tests/stub_recomp_call.cpp)
+target_link_libraries(crt_tests PRIVATE recomp_platform recomp_runtime_testing)
+target_compile_options(crt_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(crt_tests 1)
+pop_test_binary(crt_tests)
+add_test(NAME crt_tests COMMAND crt_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(crt_tests PROPERTIES LABELS nogame TIMEOUT 30)
 target_link_libraries(runtime_tests PRIVATE recomp_platform recomp_runtime recomp_dx)
 target_compile_options(runtime_tests PRIVATE ${POP_WARN_HOST})
 pop_optimize(runtime_tests 1)

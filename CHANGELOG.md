@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Serve VC8 CRT memory, narrow/wide strings, numeric conversions, floating-point
+  control, bounded guest printf/scanf arguments, profile-backed files, startup
+  data, environment, locale/ctype, exit tables, threads and time. Implement the
+  28-byte VC8 char/wchar_t basic_string ABI with safe overlapping mutations and
+  catchable allocation/length/position errors. Required unsupported CRT imports
+  stop with their own name; optional missing export probes still return null.
+  Discover DLL CRT initializer tables through IAT calls and jump thunks. Fixes #25.
+
 - Handle VC8 C++ throws, typed/reference/value catches, catch copies, nested
   cleanups, rethrows and continuation transfer with live translated checkpoints.
   Model the VC8 std::exception layout and RTTI, type_info destruction and

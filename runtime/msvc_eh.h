@@ -14,6 +14,9 @@ void recomp_msvc_callback_leave(X86 *c, uint32_t depth);
 void recomp_msvc_seh_enter(X86 *c);
 void recomp_msvc_seh_leave(X86 *c);
 void recomp_msvc_reset(X86 *c);
+// Runtime CRT operations throw directly, without inventing a guest_call
+// boundary between the operation and its translated caller's checkpoint.
+void recomp_msvc_throw(X86 *c, uint32_t object, uint32_t throw_info);
 #ifdef POPM_TESTING
 uint32_t recomp_msvc_test_frame_count(X86 *c);
 #endif

@@ -121,6 +121,15 @@ static void caught(X86 *c) {
 static void callback_throw(X86 *) {
     raise(object, throw_info);
 }
+static void crt_caught(X86 *c) {
+    ++catches;
+    const uint32_t copied = outer_reg + 12 - 64;
+    CHECK(!std::strcmp((const char *)gm_ptr(rd32(copied + 4)), "string position"));
+    // The message in a by-value exception is its own inline string, rather
+    // than a pointer into the reserved throwing object that will be reused.
+    CHECK(rd32(copied + 4) == copied + 16 && rd32(copied + 32) == 15);
+    set_eax(c, continuation);
+}
 static void abandoned_callback(X86 *) {
     recomp_callback_truncate(0);
     longjmp(callback_escape, 1);
@@ -266,6 +275,31 @@ static void run_catch(unsigned mode) {
     wr32(cpu.fs_base, 0xffffffff);
     recomp_msvc_frame_leave(&cpu);
     CHECK(recomp_msvc_test_frame_count(&cpu) == 0);
+}
+static void crt_string_exception() {
+    reset();
+    std::memcpy(gm_ptr(type + 8), ".?AVout_of_range@std@@", 23);
+    const uint32_t data = info(type), handler = stub(data);
+    wr32(data + 144 + 12, imports_alloc_trampoline("tests.dll", "crt catch", crt_caught, 0));
+    const uint32_t str = alloc(28);
+    wr32(str + 24, 15);
+    publish(outer_reg, 0xffffffff, handler, 0);
+    jmp_buf *env = recomp_msvc_frame_enter(&cpu, handler, data);
+    if (!setjmp(*env)) {
+        cpu.r[R_ECX] = str;
+        cpu.r[R_ESP] -= 8;
+        wr32(cpu.r[R_ESP], continuation);
+        wr32(cpu.r[R_ESP] + 4, 1);
+        const uint32_t at = imports_resolve(
+            "msvcp80.dll",
+            "?at@?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEAADI@Z");
+        CHECK(at);
+        imports_dispatch(&cpu, at);
+        CHECK(false);
+    }
+    CHECK(recomp_msvc_frame_land(&cpu) == continuation && catches == 1);
+    wr32(cpu.fs_base, 0xffffffff);
+    recomp_msvc_frame_leave(&cpu);
 }
 static void nested(bool rethrow, bool fresh = false) {
     reset();
@@ -490,6 +524,7 @@ int main(int argc, char **argv) {
     mixed_registration();
     mixed_registration(true);
     emitted_function();
+    crt_string_exception();
     data_arena_reset();
     char executable[4096];
     CHECK(os_exe_path(executable, sizeof executable) == 0);

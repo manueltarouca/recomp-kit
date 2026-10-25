@@ -155,7 +155,8 @@ uint64_t os_monotonic_ns(void); // never goes backwards; arbitrary origin
 // Broken-down local and UTC time for a Unix timestamp; 0 or -1.
 int os_localtime(int64_t seconds, struct tm *out);
 int os_gmtime(int64_t seconds, struct tm *out);
-uint64_t os_wall_time_us(void); // microseconds since the Unix epoch
+int64_t os_mktime(struct tm *inout); // local time, normalizes its fields
+uint64_t os_wall_time_us(void);      // microseconds since the Unix epoch
 void os_sleep_us(uint64_t us);
 
 // ---------------------------------------------------------------------------

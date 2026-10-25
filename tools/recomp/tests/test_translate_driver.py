@@ -147,6 +147,28 @@ def test_initterm_takes_a_table_of_function_pointers():
     assert entries == {0x00401000, 0x00401005}
 
 
+@pytest.mark.parametrize("direct", [False, True])
+@pytest.mark.parametrize("name", ["_initterm", "_initterm_e"])
+def test_initterm_dll_iat_and_jump_thunk(direct, name):
+    import struct
+    img, fns = _walker_image([0x00401000, 0, 0x00401005])
+    iat, thunk, caller = 0x00402100, fns[0].addr, fns[1].addr
+    img.iat_names = {iat: name}
+    img.data = bytearray(img.data)
+    jump = b"\xff\x25" + struct.pack("<I", iat)
+    img.data[thunk-img.base:thunk-img.base+len(jump)] = jump
+    if direct:
+        call = b"\xff\x15" + struct.pack("<I", iat) + b"\xc3"
+        img.data[caller+10-img.base:caller+10-img.base+len(call)] = call
+    functions = []
+    for at in (thunk, caller):
+        insns = img.recover(at, set())
+        functions.append(T.Function(at, "fn_%08x" % at, insns[-1].addr+len(insns[-1].raw)-at, insns))
+    ranges, entries = img.initterm_tables(functions)
+    assert len(ranges) == 1
+    assert entries == {0x00401000, 0x00401005}
+
+
 def test_initterm_refuses_a_range_of_text():
     """The strict table test is what makes the loose walker test safe.
 

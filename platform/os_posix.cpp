@@ -433,6 +433,9 @@ int os_gmtime(int64_t seconds, struct tm *out) {
     time_t t = (time_t)seconds;
     return gmtime_r(&t, out) ? 0 : -1;
 }
+int64_t os_mktime(struct tm *inout) {
+    return int64_t(mktime(inout));
+}
 
 uint64_t os_monotonic_ns(void) {
 #ifdef __APPLE__

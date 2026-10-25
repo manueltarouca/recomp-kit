@@ -1,5 +1,17 @@
 # Testing
 
+`crt_tests` exercises the VC8 imports through guest ABI calls: allocation and
+overflow refusal, sort callbacks, UTF-16 strings, integer and floating-point
+conversions, x87/MXCSR control, printf/scanf and legacy NaNs, secure truncation,
+file operations through a temporary resolver, stable descriptors across many
+opens, startup data, environment, ctype, exit tables, time, char/wchar_t C++
+strings and CRT thread exit/errno cleanup. Child processes verify named aborts
+for out-of-arena memory and file transfers, multiplication overflow, unknown
+required imports and unbounded format widths. `msvc_eh_tests` additionally
+catches a CRT string position exception by value through a live checkpoint.
+`test_translate_driver.py` checks CRT IAT calls and initializer jump thunks.
+See [CRT compatibility](crt.md) for supported layouts and current limits.
+
 `msvc_eh_tests` runs typed/ellipsis/reference/value catches, base and virtual-base
 adjustments, copy constructors, nested cleanup, rethrow and replacement throws
 through the guest import ABI. Subprocesses check uncaught type diagnostics,
