@@ -183,6 +183,21 @@ def load(game_dir):
             or any(ord(c) < 32 for c in description)):
         raise ValueError('%s: [d3d9.adapter] description must be 1..511 UTF-8 bytes without control characters' % source)
     translate = cfg.setdefault("translate", {})
+    ranges = translate.setdefault("untranslated_ranges", [])
+    if not isinstance(ranges, list):
+        raise ValueError("%s: [translate] untranslated_ranges must be a list of tables" % source)
+    previous_end = 0
+    for entry in ranges:
+        if (not isinstance(entry, dict) or set(entry) - {"start", "end", "on_branch"}
+                or type(entry.get("start")) is not int or type(entry.get("end")) is not int
+                or not 0 <= entry["start"] < entry["end"] <= 0x100000000
+                or entry.get("on_branch", "fail") not in ("fail", "trap")):
+            raise ValueError("%s: [translate] untranslated_ranges requires disjoint 32-bit start/end ranges and on_branch fail/trap" % source)
+        entry.setdefault("on_branch", "fail")
+    for entry in sorted(ranges, key=lambda r: r["start"]):
+        if entry["start"] < previous_end:
+            raise ValueError("%s: [translate] untranslated_ranges must not overlap" % source)
+        previous_end = entry["end"]
     intrinsics = translate.get("intrinsics")
     if intrinsics is not None:
         if not isinstance(intrinsics, dict) or (intrinsics and set(intrinsics) != {"setjmp", "longjmp"}):

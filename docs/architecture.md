@@ -145,6 +145,27 @@ indirect setjmp calls retain the runtime's explicit failure path. An empty
 table disables substitutions, while omitting it retains existing-port defaults.
 An executable's pair is cleared when translating an auxiliary module.
 
+Switch recovery keeps clean omitted cases in the dispatching body. A case
+may fall into its own listed tail; another body's bytes and opcode interiors
+remain boundaries. Distant cases are accepted within the body's own listed
+extent. Bounds through EBP locals require a stable frame/slot and an away
+guard, with no branch bypassing the comparison. ESP locals are not inferred.
+Pointer-named methods probe their own switches before treating relocated
+case labels as independent entry candidates.
+
+`RECOMP_TRACE_DISCOVERY=00401000,00402000` logs consideration, ownership and
+evidence changes for selected addresses. `tools/recomp/tests/probe_discovery.py
+--game games/example` removes configured seeds from an in-memory scratch
+configuration and re-runs discovery into `build/probe-discovery`; `--addresses`
+selects specific addresses. It never edits the port's files.
+
+A port can deliberately omit code using `[translate] untranslated_ranges`,
+an array of `{start = 0x401000, end = 0x402000, on_branch = "fail"}` tables.
+The end is exclusive; ranges must not overlap. `fail` (the default) refuses
+a direct branch into that range, including under `--allow-unmodelled`.
+`trap` emits `recomp_unknown_call` at the transfer. The exclusion applies to
+listed and discovered code; executable exclusions are cleared for DLLs.
+
 Multimedia timers default to the guest message pump. A game can select
 `[system] mm_timers = "thread"` to run them on a runtime-owned cooperative
 worker with its own guest stack and TLS. It waits on an event until the next

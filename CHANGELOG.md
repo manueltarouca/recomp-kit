@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Keep detached and undisassembled switch cases in their owning function,
+  including cases beyond 64 KB within its listed extent. Follow guarded EBP
+  locals, reject bounds bypassed by branches, recover pointer-named methods
+  before their own case labels can split them, and terminate calls through
+  exit import slots. Add discovery tracing and explicit untranslated ranges.
+  Fixes #27.
+
 - Route window and thread messages to their receiving guest thread, including
   WM_QUIT and PostThreadMessageA/W. Fix dotless file searches, align fresh
   VirtualAlloc reservations to 64 KB, and serve computer-name, temporary-path

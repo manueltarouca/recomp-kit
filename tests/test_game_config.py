@@ -20,6 +20,24 @@ gen_game_config = load_module("gen_game_config")
 
 
 class LoadTests(unittest.TestCase):
+    def test_untranslated_ranges(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text(encoding="utf-8")
+            (game / "globals.toml").write_text("", encoding="utf-8")
+            valid = '[{start=0x401000,end=0x402000,on_branch="trap"}]'
+            for value in (valid, '[]', '[{start=0x401000,end=0x402000}]'):
+                (game / "game.toml").write_text(stub.replace('[translate]', '[translate]\nuntranslated_ranges = '+value), encoding="utf-8")
+                cfg = game_config.load(game)
+                self.assertIn("untranslated_ranges",cfg["translate"])
+            for value in ('true', '[1]', '[{start=true,end=42}]', '[{start=3,end=3}]',
+                          '[{start=-1,end=3}]','[{start=0,end=0x100000001}]',
+                          '[{start=1,end=4},{start=3,end=5}]',
+                          '[{start=1,end=4,on_branch="skip"}]', '[{start=1,end=4,typo=1}]'):
+                (game / "game.toml").write_text(stub.replace('[translate]', '[translate]\nuntranslated_ranges = '+value), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError,"untranslated_ranges"):
+                    game_config.load(game)
+
     def test_executable_subdirectory(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

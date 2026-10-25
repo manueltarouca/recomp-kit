@@ -45,6 +45,12 @@ VISUAL_ANIMATION_READS = frozenset()
 EXTRA_ENTRY_POINTS = frozenset()
 RESUMABLE_STACKS = False
 FUNCTION_ALIGNMENT = 16
+UNTRANSLATED_RANGES = ()
+
+
+def untranslated_policy(address):
+    return next((policy for start, end, policy in UNTRANSLATED_RANGES
+                 if start <= address < end), None)
 
 #: game.toml [translate] rewrites: an instruction's memory operand moved to a
 #: free address, and the words the loader seeds before the game runs.
@@ -82,6 +88,8 @@ def configure_module(cfg, key):
     global LISTINGS, FUNCS_TSV, BINARY, CURATED, ANIMATION_COUNTER, VISUAL_ANIMATION_READS
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT, SYMBOL_PREFIX, AUX_MODULE
     global RESUMABLE_STACKS
+    global UNTRANSLATED_RANGES
+    UNTRANSLATED_RANGES = ()  # Executable address exclusions do not describe a DLL.
     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
     mods = {m["key"]: m for m in cfg.get("aux_modules", [])}
     if key not in mods:
@@ -132,6 +140,9 @@ def configure(cfg):
     VISUAL_ANIMATION_READS = frozenset(cfg["translate"].get("volatile_reads", ()))
     global EXTRA_ENTRY_POINTS, FUNCTION_ALIGNMENT
     global RESUMABLE_STACKS
+    global UNTRANSLATED_RANGES
+    UNTRANSLATED_RANGES = tuple((r["start"], r["end"], r["on_branch"])
+                               for r in cfg["translate"].get("untranslated_ranges", ()))
     configure_intrinsics(cfg["translate"].get("intrinsics"))
     RESUMABLE_STACKS = cfg["translate"].get("resumable_stacks", False)
     EXTRA_ENTRY_POINTS = frozenset(int(a) for a in cfg["translate"].get("entry_points", ()))
@@ -1569,7 +1580,8 @@ class Image(object):
             va = pending.pop()
             while len(seen) < limit:
                 claimed = va in listed and not (may_pass is not None and may_pass(va))
-                if va in seen or claimed or va in boundary_set or not (lo <= va < hi):
+                if (va in seen or claimed or va in boundary_set or not (lo <= va < hi)
+                        or untranslated_policy(va)):
                     break
                 got = list(self.md.disasm(self.data[va - self.base:va - self.base + 16],
                                           va, count=1))
@@ -1603,8 +1615,9 @@ class Image(object):
                         pending.append(t)
                 if ci.mnemonic in ("ret", "retn", "jmp"):
                     break
-                if (ci.mnemonic == "call" and ci.op_str.startswith("0x")
-                        and int(ci.op_str, 16) in self.noreturn_callees):
+                if (ci.mnemonic == "call" and (
+                        (ci.op_str.startswith("0x") and int(ci.op_str, 16) in self.noreturn_callees)
+                        or noreturn_import(seen[va], getattr(self, "iat_names", {})))):
                     break
                 va = nxt
             else:
@@ -1787,6 +1800,22 @@ NORETURN_IMPORTS = frozenset(("RaiseException", "ExitProcess", "TerminateProcess
                               "ExitThread", "FatalAppExitA", "FatalExit"))
 
 
+def noreturn_import(ins, iat_names):
+    """Recognize a call through a fixed import slot, never an object field."""
+    if ins.mnem != "CALL" or not ins.ops:
+        return False
+    try:
+        op = parse_operand(ins.ops[0])
+    except TranslateError:
+        return False
+    # RaiseException can resume after a continuable exception; terminating
+    # another process can return too. Only unconditional local exits end a
+    # raw import call without further argument/control-flow evidence.
+    exits = {"ExitProcess", "ExitThread", "FatalAppExitA", "FatalExit"}
+    return (op.kind == "mem" and op.base is None and op.index is None
+            and iat_names.get(op.disp) in exits)
+
+
 def noreturn_callees_from(parsed, iat_names, image=None):
     """Callees that never return, as the listings show them.
 
@@ -1927,7 +1956,9 @@ class Translator(object):
         if ins.mnem != "CALL":
             return False
         t = self.branch_target(ins)
-        return t is not None and t in self.noreturn_callees
+        return ((t is not None and t in self.noreturn_callees)
+                or (t is not None and untranslated_policy(t) == "trap")
+                or noreturn_import(ins, getattr(self.image, "iat_names", {})))
 
     @staticmethod
     def closed_noreturn_loop(fn):
@@ -2600,6 +2631,8 @@ class Translator(object):
 
     def want_target(self, fn, ins, target, k, strict=None):
         """Validate a jump-table entry, deferring recovery on pass 1."""
+        if target is not None and untranslated_policy(target):
+            return  # The emitter enforces this explicit range's branch policy.
         if target is not None and self.is_block_entry(fn, target):
             return
         if strict is False:
@@ -2610,7 +2643,7 @@ class Translator(object):
         # body, so bound recovery by a generous window past the entry rather
         # than by fn.end.
         if (not self.strict and target is not None
-                and min(fn.addr, fn.insns[0].addr) <= target < fn.addr + 0x10000
+                and min(fn.addr, fn.insns[0].addr) <= target < max(fn.end, fn.addr + 0x10000)
                 and self.image.is_exec(target)):
             self.unlisted_targets.add(target)
             return
@@ -2646,6 +2679,11 @@ class Translator(object):
                 except TranslateError:
                     return (None, None)
                 if (dst.kind == "reg" and dst.reg == idx_reg and src.kind == "mem"
+                        and src.size == 32 and src.base == 5 and src.index is None):
+                    count = self.stack_slot_bound(fn, j, src)
+                    if count is not None:
+                        return ("bounded", count)
+                if (dst.kind == "reg" and dst.reg == idx_reg and src.kind == "mem"
                         and src.size == 8 and src.index is None
                         and src.base is not None and src.disp):
                     inner = self.index_source(fn, j, src.base)
@@ -2656,6 +2694,29 @@ class Translator(object):
                         return ("byte_table", (src.disp + first, count))
             return (None, None)
         return (None, None)
+
+    def stack_slot_bound(self, fn, load, slot):
+        """Follow an EBP local only across a guarded, unmodified stack slot.
+
+        ESP locals change meaning across pushes/calls. Even an EBP slot loses
+        its proof at an indirect write or a call that could alias the local.
+        """
+        for j in range(load - 1, max(-1, load - 16), -1):
+            ins = fn.insns[j]
+            if self.writes_reg32(ins, 5) or ins.mnem == "CALL":
+                return None
+            try:
+                op = parse_operand(ins.ops[0]) if ins.ops else None
+            except TranslateError:
+                return None
+            if (ins.mnem == "CMP" and len(ins.ops) == 2 and op.kind == "mem"
+                    and op.size == 32 and op.base == 5 and op.index is None
+                    and op.disp == slot.disp):
+                return self.cmp_bound_here(fn, j, None, slot=slot)
+            if (op is not None and op.kind == "mem"
+                    and ins.mnem not in ("CMP", "TEST", "PUSH") and ins.mnem not in JCC):
+                return None
+        return None
 
     def lea_bound_here(self, fn, j, idx_reg):
         """CMP of a prior LEA alias bounds the original index at an offset.
@@ -2697,16 +2758,26 @@ class Translator(object):
     #: index is out of range and the compare bounds nothing.
     GUARD_BOUND = {"JA": 1, "JNBE": 1, "JAE": 0, "JNC": 0, "JNB": 0}
 
-    def cmp_bound_here(self, fn, j, idx_reg):
+    def cmp_bound_here(self, fn, j, idx_reg, slot=None):
         """`CMP idx,N` guarded by an away-branching JA/JAE -> reachable count."""
         ins = fn.insns[j]
         try:
             a, b = parse_operand(ins.ops[0]), parse_operand(ins.ops[1])
         except TranslateError:
             return None
-        if not (a.kind == "reg" and a.reg == idx_reg and b.kind == "imm"):
+        matches = (a.kind == "reg" and a.reg == idx_reg) if slot is None else (
+            a.kind == "mem" and a.size == slot.size and a.base == slot.base
+            and a.index == slot.index and a.disp == slot.disp)
+        if not (matches and b.kind == "imm"):
             return None
         if b.imm < 0 or b.imm > 0xFFFF:
+            return None
+        # Every path reaching the dispatch must execute the comparison.
+        # A branch into its suffix invalidates a textual compare/guard match.
+        end = fn.insns[self.jmp_index].addr
+        if any((target := self.branch_target(other)) is not None
+               and ins.addr < target <= end
+               for other in fn.insns if other.mnem == "JMP" or other.mnem in JCC):
             return None
         # The guard is the first later instruction that reads the flags, not
         # necessarily the next one: MSVC schedules unrelated moves in between.
@@ -2980,6 +3051,9 @@ class Translator(object):
         # four bytes short of the real rel32 continuation. Listing gaps can
         # also skip past it. The return address belongs to the instruction.
         nxt = fn.fallthrough[i] or (fn.insns[i + 1].addr if i + 1 < len(fn.insns) else fn.end)
+        target = self.branch_target(ins) if ins.mnem in JCC or ins.mnem in ("CALL", "JMP") else None
+        if target is not None and untranslated_policy(target) == "fail":
+            self.excluded_branch(target)  # An explicit config gate survives --allow-unmodelled.
         try:
             body = self._emit(fn, i, ins, m, nxt, live)
             body = visual_animation_read(ins.addr, body)
@@ -3013,6 +3087,11 @@ class Translator(object):
                              "INSB", "INSW", "INSD", "OUTSB", "OUTSW", "OUTSD"))
 
     def _emit(self, fn, i, ins, m, nxt, live):
+        target = self.branch_target(ins) if m == "CALL" or m == "JMP" or m in JCC else None
+        if target is not None and untranslated_policy(target):
+            trap = self.excluded_branch(target)
+            if m == "CALL":
+                return trap
         if any(AVX_OPERAND_RE.search(o) for o in ins.ops or ()):
             # Never modelled, and its operands do not parse: trap it here,
             # before parsing refuses the whole function over a path CPUID
@@ -3402,6 +3481,9 @@ class Translator(object):
             if RESUMABLE_STACKS:
                 L.append("if (c->eip != %s) return;" % hexlit(nxt))
             self.stats["_call_indirect"] += 1
+            if self.never_returns(ins):
+                self.stats["_noreturn_trap"] += 1
+                L.append("recomp_unknown_call(c, %s); return;" % hexlit(nxt))
             return L
 
         if m == "RET":
@@ -3698,6 +3780,8 @@ class Translator(object):
         return poll + "goto L_%08x;" % target
 
     def goto_target(self, fn, t, ins):
+        if untranslated_policy(t):
+            return self.excluded_branch(t)
         if t in fn.index:
             return [self.goto_label(t, ins.addr)]
         if t in self.func_addrs:
@@ -3706,6 +3790,12 @@ class Translator(object):
         self.stats["_tailcall_unknown"] += 1
         self.notes.append("%08x: jump to %08x outside any known function" % (ins.addr, t))
         return ["c->eip = %s; recomp_jump(c, %s); return;" % (hexlit(ins.addr), hexlit(t))]
+
+    @staticmethod
+    def excluded_branch(target):
+        if untranslated_policy(target) == "fail":
+            raise TranslateError("direct branch into untranslated range at %08x" % target)
+        return ["recomp_unknown_call(c, %s); return;" % hexlit(target)]
 
     def emit_indirect_jump(self, fn, i, ins, op):
         if i in fn.return_jumps:
@@ -4295,6 +4385,15 @@ def main():
     ap.add_argument("--module", default=None, metavar="KEY",
                     help="translate the auxiliary module [modules.aux.KEY] instead of the executable")
     args = ap.parse_args()
+    try:
+        trace_addresses = {int(a.strip(),16) for a in os.environ.get("RECOMP_TRACE_DISCOVERY", "").split(",")
+                           if a.strip()}
+    except ValueError:
+        raise TranslateError("RECOMP_TRACE_DISCOVERY requires comma-separated hexadecimal addresses")
+
+    def trace(address, decision):
+        if address in trace_addresses:
+            print("discovery %08x: %s" % (address, decision), file=sys.stderr)
     cfg = game_config.load(args.game)
     configure(cfg)
     if args.module:
@@ -4365,10 +4464,17 @@ def main():
     parsed = []
     failures = []
     for addr, name, nbytes, path in entries:
+        if untranslated_policy(addr):
+            all_addrs.discard(addr)
+            continue
         try:
             insns = parse_listing(path)
             if delta:
                 insns = image.rebase_listing(insns)
+            insns = [ins for ins in insns if not untranslated_policy(ins.addr)]
+            if not insns:
+                all_addrs.discard(addr)
+                continue
         except TranslateError as e:
             failures.append((addr, "parse: %s" % e))
             continue
@@ -4439,6 +4545,7 @@ def main():
     candidate_entries = set(candidate_starts)
     scan_aliases = set()
     pointer_callees = set()
+    switch_owners = {}
 
     def remember_candidate(target):
         if target not in candidate_entries:
@@ -4668,9 +4775,9 @@ def main():
     def protected_source(home):
         return home is not None and home.addr in protected_entries
 
-    def resolve(t, listed, home=None, validate=True, why="branch", continuation=True):
+    def resolve_candidate(t, listed, home=None, validate=True, why="branch", continuation=True):
         """Make `t` an entry point.  Returns True if that changed anything."""
-        if t is None:
+        if t is None or untranslated_policy(t):
             return False
         strength = (3 if why in STRUCTURAL_PROVENANCE else
                     2 if why == "branch" and home is not None
@@ -4690,7 +4797,8 @@ def main():
             return False
         # Branches already inside the current body are its own control flow,
         # not independently proposed function starts.
-        own_interior = home is not None and t in home.addrs
+        own_interior = ((home is not None and t in home.addrs)
+                        or (t in switch_owners and owner.get(t) is switch_owners[t]))
         independent = why != "branch" or protected_source(home)
         if (t in scan_aliases and t in owner
                 and entry_strength.get(owner[t].addr, 0) > strength):
@@ -4770,6 +4878,14 @@ def main():
             section_end = next((end for lo, end, _ in image.exec_ranges if lo <= t < end), t)
             span_index = bisect_right(listed_starts, t) - 1
             span_end = span_ends[listed_starts[span_index]] if span_index >= 0 else section_end
+            # A listing starting in this first opcode cannot delimit a method.
+            # Only skip that impossible boundary; a real later entry retains
+            # its normal claim, and the completed body still has to validate.
+            first_end = image.insn_end(t, "") or t+1
+            if span_end < first_end:
+                next_index = bisect_right(listed_starts, first_end-1)
+                span_end = min(section_end, listed_starts[next_index]
+                               if next_index < len(listed_starts) else section_end)
             bounds = (t, min(section_end, span_end))
             # PUSH-named continuations and SEH landings retain body ownership;
             # their callable aliases are not new function-start boundaries.
@@ -4777,10 +4893,21 @@ def main():
             # ordinary content/terminator checks and the final pruning gate.
             probe = image.recover(t, recovery_stops, bounds=bounds)
             continuations, attempted, owned = set(), set(), set()
+            switch_targets, switch_owned = set(), set()
             fragments = {ins.addr: ins for ins in probe}
             while fragments:
                 probe_fn = Function(t, "candidate", 0, [fragments[a] for a in sorted(fragments)])
                 probe_fn.measure(image)
+                # Discover this method's own tables before relocated case
+                # labels can become competing function-start boundaries.
+                try:
+                    tr.prepare(probe_fn)
+                except TranslateError:
+                    pass
+                for (entry, _site), targets in list(tr.jumptables.items()):
+                    if entry == t:
+                        switch_targets.update(a for a in targets if t < a < bounds[1])
+                        continuations.update(switch_targets)
                 stubs = set(seh_frame_sites(probe_fn, image).values())
                 for ins in probe_fn.insns:
                     if ins.mnem == "PUSH" and ins.ops:
@@ -4802,21 +4929,32 @@ def main():
                     # Recover its clean span-bounded bytes before judging the
                     # establishing prefix's termination, then let normal
                     # adoption transfer ownership without promoting the prefix.
-                    block = image.recover(target, stubs, bounds=bounds)
+                    block = image.recover(target, stubs | (set(fragments) if target in switch_targets else set()),
+                                          bounds=bounds)
                     fragment = Function(target, "continuation", 0, block)
                     fragment.measure(image)
-                    if not block or not accepts(fragment):
+                    merged = dict(fragments)
+                    merged.update((ins.addr, ins) for ins in block)
+                    combined = Function(t, "candidate", 0, [merged[a] for a in sorted(merged)])
+                    combined.measure(image)
+                    if not block or not accepts(combined if target in switch_targets else fragment):
                         continue
+                    if target in switch_targets:
+                        switch_owned.update(ins.addr for ins in block)
                     owned.update(ins.addr for ins in block)
                     fragments.update((ins.addr, ins) for ins in block)
             if owned:
                 recovery_stops = set(recovery_stops) - owned
             lo_index, hi_index = bisect_right(candidate_starts, t), bisect_right(candidate_starts, bounds[1])
             boundaries = {a for a in candidate_starts[lo_index:hi_index]
-                          if a not in owned and a not in finally_owners}
+                          if a not in owned and a not in finally_owners and a >= first_end}
         insns = image.recover(t, recovery_stops, bounds=bounds, boundaries=boundaries)
         if not insns:
             return False
+        if not protected and switch_owned:
+            merged = {ins.addr: ins for ins in insns}
+            merged.update((a, fragments[a]) for a in switch_owned)
+            insns = [merged[a] for a in sorted(merged)]
         name = ("FUN_%08x" if why == "config" else "recovered_%08x") % t
         new_fn = Function(t, name, insns[-1].addr + 1 - t, insns)
         new_fn.measure(image)
@@ -4911,6 +5049,9 @@ def main():
         recovered.append(new_fn)
         all_addrs.add(t)
         register(new_fn)
+        if not protected:
+            for target in switch_targets & new_fn.addrs:
+                switch_owners[target] = new_fn
         if separate:
             extra.pop(t, None)
             for ins in new_fn.insns:
@@ -4918,7 +5059,61 @@ def main():
                     owner[ins.addr] = new_fn
         return True
 
+    def resolve(t, listed, home=None, validate=True, why="branch", continuation=True):
+        trace(t, "consider %s from %s" % (why, "%08x" % home.addr if home else "scan"))
+        changed = resolve_candidate(t, listed, home, validate, why, continuation)
+        existing = owner.get(t)
+        trace(t, "%s; owner=%s evidence=%s strength=%d%s" % (
+            "changed" if changed else "unchanged",
+            "%08x" % existing.addr if existing else "none", provenance.get(t,"none"),
+            entry_strength.get(t,0), " rejected" if t in rejected else ""))
+        return changed
+
     retired_finally_bodies = set()
+
+    def extend_switch_body(fn):
+        """Adopt clean omitted cases, stopping at every existing instruction.
+
+        A case can fall into this body's listed tail. It must never consume
+        another body or an opcode interior, even when a large listed extent
+        permits a case much farther away than the near-entry recovery window.
+        """
+        changed = False
+        ceiling = max(fn.end, fn.addr + 0x10000)
+        for (entry, _site), targets in list(tr.jumptables.items()):
+            if entry != fn.addr:
+                continue
+            for target in sorted(set(targets)):
+                if (target in owner or not min(fn.addr, fn.insns[0].addr) <= target < ceiling
+                        or interior_bytes[target - image.base]):
+                    continue
+                block = image.recover(target, set(owner),
+                                      bounds=(min(fn.addr, fn.insns[0].addr), min(ceiling, image.end)))
+                if not block:
+                    continue
+                if any(interior_bytes[ins.addr - image.base] or any(
+                        address in owner or interior_bytes[address - image.base]
+                        for address in range(ins.addr, image.insn_end(ins.addr, ins.mnem) or ins.addr+1))
+                       for ins in block):
+                    continue
+                merged = {ins.addr: ins for ins in fn.insns}
+                merged.update((ins.addr, ins) for ins in block)
+                grown = Function(fn.addr, fn.name, fn.size, [merged[a] for a in sorted(merged)])
+                grown.measure(image)
+                # A fall-out may enter this same function, never unrelated
+                # listed code. Reject padding decoded as a plausible prefix.
+                if any(ins.mnem not in TERMINATORS and not tr.never_returns(ins)
+                       and grown.fallthrough[i] not in grown.addrs
+                       for i, ins in enumerate(grown.insns) if ins.addr not in fn.addrs):
+                    continue
+                if not accepts(grown):
+                    continue
+                fn.__dict__.update(grown.__dict__)
+                register(fn)
+                switch_owners[target] = fn
+                trace(target, "adopted as local case in %08x (%d instructions)" % (fn.addr,len(block)))
+                changed = True
+        return changed
 
     def extend_finally_body(fn):
         """Keep normal cleanup and its pushed epilogue in the establishing body.
@@ -5131,6 +5326,9 @@ def main():
                 pass                      # reported by the strict pass below
         listed = set(owner)
         changed = False
+        for fn in list(parsed):
+            if fn not in retired_finally_bodies:
+                changed |= extend_switch_body(fn)
         for fn in list(parsed):
             if fn not in retired_finally_bodies:
                 changed |= extend_finally_body(fn)
