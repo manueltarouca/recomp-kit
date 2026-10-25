@@ -7,6 +7,10 @@
   GetTickCount spin that sees no time pass sleeps 1 ms cooperatively, and the
   SDL idle service pumps events at most every 4 ms.
 
+- Keep 250 ms of streamed QMixer audio queued ahead of each voice
+  (`RECOMP_QMIX_LEAD_MS`), so a long guest frame no longer lets a stream run
+  dry with an audible gap.
+
 - Group a frame's UI blit records with a left-to-right sweep instead of
   testing every pair. Menus with hundreds of small blits no longer stall
   the presenter.

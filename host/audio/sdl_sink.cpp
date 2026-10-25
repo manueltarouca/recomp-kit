@@ -11,6 +11,8 @@
 #include <functional>
 #include "../../platform/os.h"
 
+uint64_t host_audio_stream_dry_count(); // mixer.cpp
+
 namespace {
 class SdlSink final : public AudioSink {
   public:
@@ -79,9 +81,10 @@ class SdlSink final : public AudioSink {
     // (or stale data) before we could render.
     void report() {
         printf("[host] audio sink: %llu pulls, %llu late (>1.5 periods), %llu starved, max gap "
-               "%.1f ms, max render %.1f ms, period %.1f ms, ahead %u frames\n",
+               "%.1f ms, max render %.1f ms, period %.1f ms, ahead %u frames, %llu stream gaps\n",
                (unsigned long long)pulls_, (unsigned long long)late_, (unsigned long long)starved_,
-               max_gap_ms_, max_render_ms_, period_ms_, ahead_frames_);
+               max_gap_ms_, max_render_ms_, period_ms_, ahead_frames_,
+               (unsigned long long)host_audio_stream_dry_count());
         fflush(stdout);
     }
     bool running() const override {

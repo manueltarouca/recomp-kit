@@ -67,6 +67,12 @@
 std::atomic<uint64_t> g_clipped_samples{0};
 std::atomic<uint32_t> g_worst_over_bits{0}; // a float, bit for bit
 
+// Streams that ran dry before their next chunk arrived (audible gaps).
+static std::atomic<uint64_t> g_stream_dry{0};
+uint64_t host_audio_stream_dry_count() {
+    return g_stream_dry.load(std::memory_order_relaxed);
+}
+
 namespace {
 
 // --- the trace, stamped with the capture's own clock ------------------------
@@ -1129,6 +1135,7 @@ extern "C" int32_t host_audio_queue(int32_t id, const void *pcm, uint32_t bytes)
         if (!channel->playing) {
             if (!channel->streaming)
                 return 0;
+            ++g_stream_dry;
             log_once("audio: a stream ran dry before its next chunk arrived; the "
                      "gap is the time nothing was ready to play");
             channel->playing = true;
@@ -1213,6 +1220,7 @@ extern "C" int32_t host_audio_queue(int32_t id, const void *pcm, uint32_t bytes)
         std::lock_guard<std::mutex> render(g_render_mutex);
         Player &p = g_players[id];
         if (!p.playing) {
+            ++g_stream_dry;
             trace("DRY     ch %d  the player had already stopped when this arrived", id);
             log_once("audio: a queued buffer arrived after the player had run dry; the "
                      "stream has a gap in it because the next chunk came too late");
