@@ -1,10 +1,12 @@
 // gpu_contract_tests.cpp - a backend against the gpu.h contract: bytes
-// round-trip, a clear and a draw land where expected, commands complete in
-// commit order, a compute kernel reads what a texture holds, and a native
-// surface makes a swapchain. Compiled once per backend with
-// POP_GPU_TEST_BACKEND naming it; the factory override selects it.
+// round-trip, reused storage takes new contents whole, a clear and a draw
+// land where expected, commands complete in commit order, a compute kernel
+// reads what a texture holds, and a native surface makes a swapchain.
+// Compiled once per backend with POP_GPU_TEST_BACKEND naming it; the factory
+// override selects it.
 #include "../../../platform/os.h"
 #include "../gpu_factory.h"
+#include <algorithm>
 
 #include <math.h>
 #include <mutex>
@@ -47,6 +49,52 @@ static void test_upload_readback() {
     d->destroy(t);
     d->destroy(p);
     CHECK(d->describe(t).width == 0);
+}
+
+// Backends may hand a destroyed texture's storage, or an earlier upload's
+// staging, to a later request. Whatever they reuse, each upload must land
+// whole and only where it was aimed, including several uploads in flight
+// before a read and sizes that alternate between small and large.
+static void test_reused_storage_holds_new_contents() {
+    auto d = create_default_device();
+    if (!d)
+        return;
+    const TextureDesc desc{64, 32, Format::RGBA8, UsageSampled | UsageCpu};
+    std::vector<uint8_t> in(64 * 32 * 4), out(in.size());
+    for (int round = 0; round < 4; ++round) {
+        Texture t = d->create_texture(desc);
+        CHECK(t);
+        for (size_t i = 0; i < in.size(); ++i)
+            in[i] = uint8_t(i * 7 + round * 31);
+        CHECK(d->upload(t, {0, 0, 64, 32}, in.data(), 64 * 4));
+        // A second upload over part of it, before anything reads the first.
+        std::vector<uint8_t> patch(16 * 8 * 4, uint8_t(0xa0 + round));
+        CHECK(d->upload(t, {8, 4, 16, 8}, patch.data(), 16 * 4));
+        for (int y = 4; y < 12; ++y)
+            memcpy(&in[(size_t(y) * 64 + 8) * 4], patch.data(), 16 * 4);
+        std::fill(out.begin(), out.end(), 0);
+        CHECK(d->readback(t, {0, 0, 64, 32}, out.data(), 64 * 4));
+        CHECK(in == out);
+        d->destroy(t);
+    }
+    Texture big = d->create_texture({512, 256, Format::RGBA8, UsageSampled | UsageCpu});
+    Texture small = d->create_texture({4, 4, Format::RGBA8, UsageSampled | UsageCpu});
+    std::vector<uint8_t> big_in(512 * 256 * 4), big_out(big_in.size());
+    for (int round = 0; round < 3; ++round) {
+        uint8_t small_in[64], small_out[64] = {0};
+        for (int i = 0; i < 64; ++i)
+            small_in[i] = uint8_t(255 - i - round);
+        for (size_t i = 0; i < big_in.size(); ++i)
+            big_in[i] = uint8_t((i >> 2) + round);
+        CHECK(d->upload(small, {0, 0, 4, 4}, small_in, 16));
+        CHECK(d->upload(big, {0, 0, 512, 256}, big_in.data(), 512 * 4));
+        CHECK(d->readback(small, {0, 0, 4, 4}, small_out, 16));
+        CHECK(d->readback(big, {0, 0, 512, 256}, big_out.data(), 512 * 4));
+        CHECK(memcmp(small_in, small_out, 64) == 0);
+        CHECK(big_in == big_out);
+    }
+    d->destroy(big);
+    d->destroy(small);
 }
 
 static void test_clear_and_compositor_draw() {
@@ -205,6 +253,7 @@ int main() {
         return 1;
     }
     test_upload_readback();
+    test_reused_storage_holds_new_contents();
     test_clear_and_compositor_draw();
     test_commit_order();
     test_compute_readback_kernel();

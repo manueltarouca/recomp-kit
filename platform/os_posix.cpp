@@ -20,6 +20,10 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__linux__) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
+#include <execinfo.h>
+#define OS_HAVE_BACKTRACE 1
+#endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -323,14 +327,36 @@ static void fault_trampoline(int sig) {
                        : sig == SIGBUS  ? "SIGBUS"
                        : sig == SIGABRT ? "an abort from the runtime"
                                         : "a fatal signal";
+#ifdef OS_HAVE_BACKTRACE
+    // Host frames for the crash: the guest EIP the handler prints is only the
+    // last guest sync point, which says nothing about where host code faulted.
+    void *frames[64];
+    int n = backtrace(frames, 64);
+    static const char head[] = "\n[host] host backtrace:\n";
+    ssize_t ignored = write(2, head, sizeof head - 1);
+    (void)ignored;
+    backtrace_symbols_fd(frames, n, 2);
+#endif
     g_fault_fn(what);
 }
 int os_install_fault_handlers(OsFaultFn fn) {
     g_fault_fn = fn;
+#ifdef OS_HAVE_BACKTRACE
+    void *prime[1];
+    backtrace(prime, 1); // loads libgcc now, not inside the handler
+#endif
     signal(SIGSEGV, fault_trampoline);
     signal(SIGBUS, fault_trampoline);
     signal(SIGABRT, fault_trampoline);
     return 1;
+}
+
+int os_fault_backtrace_available() {
+#ifdef OS_HAVE_BACKTRACE
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 void os_write_stderr_raw(const char *s, size_t n) {

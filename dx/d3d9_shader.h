@@ -81,6 +81,8 @@ enum Op : uint32_t {
     OP_TEXCOORD = 64,
     OP_TEXKILL = 65,
     OP_TEX = 66,
+    OP_TEXM3X2PAD = 71, // ps.1.x: u = dot(texcoord[dst].xyz, src.rgb)
+    OP_TEXM3X2TEX = 72, // ps.1.x: v likewise; samples stage dst at (u, v)
     OP_TEXLDL = 95,
     OP_EXPP = 78,
     OP_LOGP = 79,

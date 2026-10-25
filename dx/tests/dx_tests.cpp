@@ -2441,6 +2441,40 @@ static void test_presenter_seal_hook_and_retirement_queue() {
     host_frame_release(flip_frame);
 }
 
+// A 2D screen shown while a device exists (the loading screen before the level
+// selector) repaints the whole on-screen target and draws nothing. That frame
+// is presented whole; a draw later in the frame makes it a clear before 3D.
+static void test_full_repaint_without_draws_is_legacy() {
+    rec_reset();
+    reset_ddraw_for_test();
+    uint32_t dd = rec_dd();
+    call_method(dd, DD_SetDisplayMode, {640, 480, 16});
+    uint32_t primary = make_primary_chain_for_test();
+    uint32_t sp = make_offscreen_for_test(640, 480, 16);
+    CHECK(primary != 0 && sp != 0);
+    if (!primary || !sp)
+        return;
+    fill_for_test(sp, 1);
+    reset_ddraw_for_test();
+    ddraw_note_device(1);
+
+    // Part of the screen only: still gameplay with HUD pieces.
+    blt_for_test(primary, sp, 0, 0, 320, 240, 0);
+    HostFrameHandle f = host_frame_current();
+    CHECK_EQ((uint32_t)host_frame_class(f), (uint32_t)HOST_SCREEN_GAMEPLAY);
+    CHECK(!host_frame_legacy(f));
+
+    // The whole screen and no draw: presented whole.
+    blt_for_test(primary, sp, 0, 0, 640, 480, 0);
+    CHECK(host_frame_legacy(f));
+    CHECK_EQ(host_legacy_fallback_count(), 0u); // not the sticky interleave fallback
+
+    // A draw after it: that was a clear before 3D.
+    ddraw_note_draw();
+    CHECK(!host_frame_legacy(f));
+    ddraw_note_device(0);
+}
+
 static void test_screen_class() {
     rec_reset();
     uint32_t rt = make_render_target_for_test(640, 480, 8);
@@ -3156,6 +3190,38 @@ static void test_cocreate_directsound() {
     }
     wr8(clsid, 0xff);
     CHECK_EQ(call_shim(cocreate, {clsid, 0, 1, iid, ppv}), 0x80040154u); // REGDB_E_CLASSNOTREG
+}
+
+// DirectSound 8 made through COM: CoCreateInstance(CLSID_DirectSound8,
+// IID_IDirectSound8), Initialize, SetCooperativeLevel. IDirectSound8 is
+// IDirectSound plus VerifyCertification; unregistered, a game made this way
+// ran without sound.
+static void test_cocreate_directsound8() {
+    // {3901CC3F-84B5-4FA4-BA35-AA8172B8A09B}, {C50A7E93-F395-4834-9EF6-7FA99DE50966}
+    static const uint8_t clsid_ds8[16] = {0x3f, 0xcc, 0x01, 0x39, 0xb5, 0x84, 0xa4, 0x4f,
+                                          0xba, 0x35, 0xaa, 0x81, 0x72, 0xb8, 0xa0, 0x9b};
+    static const uint8_t iid_ds8[16] = {0x93, 0x7e, 0x0a, 0xc5, 0x95, 0xf3, 0x34, 0x48,
+                                        0x9e, 0xf6, 0x7f, 0xa9, 0x9d, 0xe5, 0x09, 0x66};
+    uint32_t clsid = sc(0x1d00), iid = sc(0x1d10), ppv = sc(0x1d20);
+    memcpy(g_mem + clsid, clsid_ds8, 16);
+    memcpy(g_mem + iid, iid_ds8, 16);
+    wr32(ppv, 0);
+    uint32_t cocreate = tramp("ole32.dll", "CoCreateInstance");
+    CHECK_EQ(call_shim(cocreate, {clsid, 0, 3, iid, ppv}), DS_OK);
+    uint32_t ds = rd32(ppv);
+    CHECK(ds != 0);
+    if (!ds)
+        return;
+    CHECK_EQ(call_method(ds, 10, {0}), DS_OK);        // Initialize(NULL)
+    CHECK_EQ(call_method(ds, 6, {0x1234, 2}), DS_OK); // SetCooperativeLevel(PRIORITY)
+    CHECK_EQ(call_method(ds, 11, {0}), DS_OK);        // VerifyCertification
+    // QueryInterface for IID_IDirectSound8 on it answers with the same object.
+    wr32(sc(0x1d30), 0);
+    CHECK_EQ(call_method(ds, 0, {iid, sc(0x1d30)}), DS_OK);
+    CHECK(rd32(sc(0x1d30)) != 0);
+    if (rd32(sc(0x1d30)))
+        call_method(rd32(sc(0x1d30)), 2);
+    call_method(ds, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -10180,6 +10246,25 @@ static void test_qmixer_frame_pump() {
         qmixer_frame_pump(&g_cpu);
     CHECK_EQ(g_fp_calls, settled);
 
+    // With a time-based lead the pump keeps that much audio in front of the
+    // voice, so a frame that runs long does not drain it: 250 ms at 11025 Hz
+    // stereo 16-bit is 11025 bytes, eleven chunks. One pump pulls at most
+    // eight, so the next tops up the rest, and the one after has nothing to do.
+    os_setenv("RECOMP_QMIX_LEAD_MS", "250");
+    qmixer_gate_reset_for_test();
+    g_queued_bytes = 0;
+    g_voice_remaining = 0;
+    uint32_t lead_calls = g_fp_calls;
+    qmixer_frame_pump(&g_cpu);
+    CHECK_EQ(g_fp_calls - lead_calls, 8u);
+    qmixer_frame_pump(&g_cpu);
+    CHECK_EQ(g_fp_calls - lead_calls, 11u);
+    CHECK(g_voice_remaining >= 11025u);
+    qmixer_frame_pump(&g_cpu);
+    CHECK_EQ(g_fp_calls - lead_calls, 11u);
+    os_setenv("RECOMP_QMIX_LEAD_MS", "0");
+    qmixer_gate_reset_for_test();
+
     // The frame pump is re-entrant-safe: the callback it ends in is guest code
     // and guest code reaches the message loop.
     CHECK_EQ(call_shim(tramp("QMIXER.dll", "QSWaveMixStopChannel"), {hmix, 0, 0}), 0u);
@@ -12631,6 +12716,9 @@ int main() {
     mem_init();
     imports_init();
     dx_register_shims();
+    // The QMixer tests below pin the one-chunk refill threshold; the time-based
+    // stream lead has its own checks in the frame pump test.
+    os_setenv("RECOMP_QMIX_LEAD_MS", "0");
 
     g_stack_top = STACK_TOP - 0x1000;
     g_scratch = heap_alloc(0x4000, true, 16);
@@ -12691,6 +12779,7 @@ int main() {
         {"DC write diff", test_getdc_releasedc},
         {"GDI primary blit", test_gdi_primary_blit},
         {"CoCreateInstance DirectSound", test_cocreate_directsound},
+        {"CoCreateInstance DirectSound 8", test_cocreate_directsound8},
         {"DirectShow audio stream", test_dshow_audio_stream},
         {"DirectShow graph playback", test_dshow_graph_playback},
         {"palette versions", test_palette_versions},
@@ -12700,6 +12789,7 @@ int main() {
         {"first HUD/overlay", test_first_hud_boundary_and_overlay_pass},
         {"overlay mapping", test_overlay_mapping_rule},
         {"interleave fallback", test_inexpressible_interleave_triggers_legacy_replay},
+        {"full repaint without draws", test_full_repaint_without_draws_is_legacy},
         {"scene/HUD intersection", test_later_scene_overlay_intersects_hud},
         {"HUD exclusions/groups", test_hud_rule_exclusions_and_grouping},
         {"projected UI containment", test_transformed_overlay_containment},

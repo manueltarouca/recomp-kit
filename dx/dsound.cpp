@@ -1635,6 +1635,29 @@ const ComMethod g_dsound[] = {
     {"Initialize", 2, DS_Initialize},
 };
 
+// IDirectSound8 is IDirectSound with VerifyCertification after it. Nothing is
+// signed: the device is reported as certified, which is what DS_OK means here.
+void DS_VerifyCertification(X86 *c) {
+    uint32_t out = arg(c, 1);
+    if (out)
+        wr32(out, 0); // DS_CERTIFIED
+    com_ret(c, DS_OK);
+}
+const ComMethod g_dsound8[] = {
+    {"QueryInterface", 3, com_QueryInterface},
+    {"AddRef", 1, com_AddRef},
+    {"Release", 1, com_Release},
+    {"CreateSoundBuffer", 4, DS_CreateSoundBuffer},
+    {"GetCaps", 2, DS_GetCaps},
+    {"DuplicateSoundBuffer", 3, DS_DuplicateSoundBuffer},
+    {"SetCooperativeLevel", 3, DS_SetCooperativeLevel},
+    {"Compact", 1, DS_Compact},
+    {"GetSpeakerConfig", 2, DS_GetSpeakerConfig},
+    {"SetSpeakerConfig", 2, DS_SetSpeakerConfig},
+    {"Initialize", 2, DS_Initialize},
+    {"VerifyCertification", 2, DS_VerifyCertification},
+};
+
 // ===========================================================================
 // DSOUND.dll exports
 // ===========================================================================
@@ -1669,6 +1692,11 @@ void DirectSoundCreate(X86 *c) {
 // DirectSoundCreate. Both make the same host object.
 static const uint8_t CLSID_DirectSound_[16] =
     IID_BYTES(0x47D4D946, 0x62E8, 0x11CF, 0x93, 0xBC, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00);
+// CLSID_DirectSound8 and IID_IDirectSound8, for a DirectX 8 game.
+static const uint8_t CLSID_DirectSound8_[16] =
+    IID_BYTES(0x3901CC3F, 0x84B5, 0x4FA4, 0xBA, 0x35, 0xAA, 0x81, 0x72, 0xB8, 0xA0, 0x9B);
+static const uint8_t IID_IDirectSound8_[16] =
+    IID_BYTES(0xC50A7E93, 0xF395, 0x4834, 0x9E, 0xF6, 0x7F, 0xA9, 0x9D, 0xE5, 0x09, 0x66);
 
 static ComObj *dsound_create() {
     return com_new(K_DSOUND);
@@ -1775,5 +1803,9 @@ void dsound_register() {
     com_set_qi_hook(K_DSBUFFER, dsbuffer_qi);
 
     com_register_class(CLSID_DirectSound_, "DirectSound", IF_DSOUND, dsound_create);
+    com_define(IF_DSOUND8, "DSOUND.dll", "IDirectSound8", g_dsound8, std::size(g_dsound8));
+    com_bind(IF_DSOUND8, K_DSOUND);
+    com_register_iid(IF_DSOUND8, IID_IDirectSound8_);
+    com_register_class(CLSID_DirectSound8_, "DirectSound8", IF_DSOUND8, dsound_create);
     imports_register(g_dsound_exports, std::size(g_dsound_exports));
 }

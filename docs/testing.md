@@ -22,6 +22,9 @@ layout model, geometry, routing, virtual pad, mapped binding, raster primitives
 and editor (including the old keypad geometry as a regression oracle), and
 `pad_tests` for the DirectInput joystick and the three XInput DLLs, which lives
 beside `dx_tests` because it defines the `host_pad_*` callbacks strongly.
+`runtime_pulse_tests` also runs without game files: synthetic guest threads
+check that a manual-reset pulse releases all waiters, an auto-reset pulse
+releases one, and a pulse with no waiters leaves the event unsignalled.
 Every `tools/test.py` mode takes `--game-dir /abs/path/to/<game>`; without it
 the kit's stub game is used and the `game`-labelled suites report a skip.
 

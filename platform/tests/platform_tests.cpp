@@ -2,6 +2,7 @@
 // or a GPU. Runs on every platform the layer supports.
 #include "../os.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -155,6 +156,22 @@ void test_paths_and_descriptors() {
     CHECK(os_chdir(cwd) == 0);
 }
 
+// The fault handler's child: send the error stream to `path`, then write
+// through an address the compiler cannot see is null. Exit code 9 shows the
+// handler ran.
+static void child_fault_handler(const char *) {
+    os_exit_immediately(9);
+}
+static int child_fault(const char *path) {
+    if (!freopen(path, "w", stderr))
+        return 1;
+    if (!os_install_fault_handlers(child_fault_handler))
+        return 2;
+    volatile uintptr_t address = 0;
+    *reinterpret_cast<volatile int *>(address) = 1;
+    return 3;
+}
+
 void test_process_and_strings() {
     char exe[4096];
     CHECK(os_exe_path(exe, sizeof exe) == 0);
@@ -173,6 +190,26 @@ void test_process_and_strings() {
     CHECK(os_wait(pid, &code) == 0);
     CHECK(code == 7);
     CHECK(strstr(exe, "platform_tests") != nullptr);
+    // A child faults with the handlers installed. The handler must run, and
+    // where the platform supports it the host frames reach the error stream.
+    const std::string report = scratch_dir() + "/fault-report.txt";
+    const char *fault_argv[] = {exe, "--child-fault", report.c_str(), nullptr};
+    CHECK(os_spawn(fault_argv, &pid) == 0);
+    code = -1;
+    CHECK(os_wait(pid, &code) == 0);
+    CHECK(code == 9);
+    std::string text;
+    if (FILE *f = fopen(report.c_str(), "rb")) {
+        char chunk[4096];
+        size_t n;
+        while ((n = fread(chunk, 1, sizeof chunk, f)) > 0)
+            text.append(chunk, n);
+        fclose(f);
+    }
+    if (os_fault_backtrace_available()) {
+        const size_t head = text.find("[host] host backtrace:\n");
+        CHECK(head != std::string::npos && text.find("platform_tests", head) != std::string::npos);
+    }
     CHECK(os_strcasecmp("Data", "DATA") == 0);
     CHECK(os_strcasecmp("a", "b") < 0);
     CHECK(os_setenv("RECOMP_PLATFORM_TEST", "yes") == 0);
@@ -254,6 +291,8 @@ void test_switch_names() {
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--child-exit-7") == 0)
         return 7;
+    if (argc > 2 && strcmp(argv[1], "--child-fault") == 0)
+        return child_fault(argv[2]);
     test_switch_names();
     test_switch_file();
     test_threads();

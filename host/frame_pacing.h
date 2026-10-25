@@ -13,6 +13,15 @@ struct FramePacingSnapshot {
     uint64_t new_frames = 0, repeats = 0, drops = 0;
     std::vector<double> intervals_ms;
 };
+// Whether the presenter may repeat its last image at `now` (seconds), given
+// when it last repeated one (`last_repeat`, negative before the first) and the
+// display's refresh period. A mailbox swapchain acknowledges a present at once,
+// so without this gate repeats run as fast as the worker loops. The 10% margin
+// keeps one repeat due per refresh despite timer jitter.
+inline bool repeat_present_due(double last_repeat, double now, double period) {
+    return last_repeat < 0 || !(now - last_repeat < period * 0.9);
+}
+
 class FramePacing {
     struct Event {
         double time, gpu_ms, age_ms;

@@ -499,11 +499,17 @@ bool win32_reset_event(uint32_t handle) {
     return true;
 }
 
+namespace {
+void pulse_event(HObj *o); // with the scheduler, below
+} // namespace
 bool win32_signal_event(uint32_t handle, bool pulse) {
     HObj *o = handle_get(handle, H_EVENT);
     if (!o)
         return false;
-    o->signalled = !pulse; // a pulse releases a waiter and leaves it unsignalled
+    if (pulse)
+        pulse_event(o);
+    else
+        o->signalled = true;
     return true;
 }
 
@@ -1829,6 +1835,22 @@ void k_ReleaseMutex(X86 *c) {
     set_eax(c, 1);
 }
 
+// PulseEvent: the event is signalled only for the threads waiting on it
+// right now - every one of them for a manual-reset event, one for an
+// auto-reset event, which resets itself when taken - and is unsignalled
+// again when the call returns. With nobody waiting it signals nothing.
+// The CRI ADX sound middleware wakes its server thread this way from a 1 ms
+// multimedia timer.
+// It used to leave the event unsignalled and release nobody.
+void k_PulseEvent(X86 *c) {
+    HObj *o = handle_get(arg(c, 0), H_EVENT);
+    if (o)
+        pulse_event(o);
+    else
+        set_last_error(ERROR_INVALID_HANDLE_);
+    set_eax(c, o ? 1 : 0);
+}
+
 void k_SetEvent(X86 *c) {
     HObj *o = handle_get(arg(c, 0), H_EVENT);
     if (o) {
@@ -2817,6 +2839,18 @@ namespace {
 // whole timeout.
 void sched_wake_all() {
     g_sched_m.lock();
+    g_sched_cv.notify_all();
+    g_sched_m.unlock();
+}
+
+// PulseEvent's body (above k_PulseEvent).
+void pulse_event(HObj *o) {
+    g_sched_m.lock();
+    o->signalled = true;
+    for (GuestThread *t : threads())
+        if (t->blocked && t->wait_kind == W_OBJECTS)
+            sched_satisfy_locked(t);
+    o->signalled = false;
     g_sched_cv.notify_all();
     g_sched_m.unlock();
 }
@@ -4904,6 +4938,7 @@ const ImportShim g_kernel32_shims[] = {
     {"KERNEL32.dll", "SuspendThread", 1, k_SuspendThread},
     {"KERNEL32.dll", "ReleaseMutex", 1, k_ReleaseMutex},
     {"KERNEL32.dll", "SetEvent", 1, k_SetEvent},
+    {"KERNEL32.dll", "PulseEvent", 1, k_PulseEvent},
     {"KERNEL32.dll", "TryEnterCriticalSection", 1, k_TryEnterCriticalSection},
     {"KERNEL32.dll", "GetCurrentThread", 0, k_GetCurrentThread},
     {"KERNEL32.dll", "GetCurrentThreadId", 0, k_GetCurrentThreadId},

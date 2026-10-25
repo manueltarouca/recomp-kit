@@ -267,15 +267,15 @@ static void test_joy_pure_helpers() {
     e.value = -32767;
     CHECK(joy_event(e, r, &ofs, &data));
     CHECK_EQ(ofs, 20u);
-    CHECK_EQ((int32_t)data, -32768);
+    CHECK_EQ((int32_t)data, 0);
     e.index = 4; // l2 -> Rx; the event value runs 0..32767
     e.value = 32767;
     CHECK(joy_event(e, r, &ofs, &data));
     CHECK_EQ(ofs, 12u);
-    CHECK_EQ((int32_t)data, 32767);
+    CHECK_EQ((int32_t)data, 65535);
     e.value = 0;
     CHECK(joy_event(e, r, &ofs, &data));
-    CHECK_EQ((int32_t)data, -32768);
+    CHECK_EQ((int32_t)data, 0);
     e.kind = 7;
     CHECK(!joy_event(e, r, &ofs, &data));
 }
@@ -492,7 +492,7 @@ static void test_joy_dinput8() {
     CHECK_EQ(call_method(dev, DID_Acquire, {}), DI_OK);
     CHECK_EQ(call_method(dev, DID_Poll, {}), DI_OK);
     g_pad.lx = 32767;
-    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 32767);
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 65535);
     // The version 8 device's own slots, past the ones it shares.
     CHECK_EQ(call_method(dev, DID8_GetImageInfo, {sc(0x900)}), DI8_E_NOTIMPL);
 }
@@ -512,7 +512,7 @@ static void test_joy_device_state() {
     uint32_t st = sc(0x400);
     memset(gm_ptr(st), 0xAB, SDK_DIJOYSTATE + 4);
     CHECK_EQ(call_method(dev, DID_GetDeviceState, {SDK_DIJOYSTATE, st}), DI_OK);
-    CHECK_EQ((int32_t)rd32(st + 0), 0);
+    CHECK_EQ((int32_t)rd32(st + 0), 32768);
     CHECK_EQ(rd32(st + 32), 0xFFFFFFFFu);
     CHECK_EQ(rd8(st + 48), 0u);
     CHECK_EQ(rd8(st + SDK_DIJOYSTATE), 0xABu); // nothing past the record
@@ -520,9 +520,9 @@ static void test_joy_device_state() {
     CHECK_EQ(call_method(dev, DID_GetDeviceState, {SDK_DIJOYSTATE2, st}), DIERR_INVALIDPARAM);
 
     g_pad.lx = 32767;
-    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 32767);
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 65535);
     g_pad.ly = -32767;
-    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 4), -32768);
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 4), 0);
 
     // A 0..1000 range on X, by offset: the stick at rest reads the centre.
     set_range(dev, PH_BYOFFSET, 0, 0, 1000);
@@ -531,7 +531,7 @@ static void test_joy_device_state() {
     g_pad.lx = 32767;
     CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 1000);
     // Y still has the default range.
-    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 4), -32768);
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 4), 0);
 
     // Range reads back.
     uint32_t p = sc(0x100);
@@ -578,7 +578,7 @@ static void test_joy_device_state() {
     // DIJOYSTATE2 is accepted, and the state is laid out the same.
     uint32_t dev2 = make_joystick(SDK_DIJOYSTATE2);
     g_pad.rx = 32767;
-    CHECK_EQ(read_state_axis(dev2, SDK_DIJOYSTATE2, 8), 32767);
+    CHECK_EQ(read_state_axis(dev2, SDK_DIJOYSTATE2, 8), 65535);
     CHECK_EQ(rd8(sc(0x400) + 49), 0x80u);
 
     // Capabilities: 6 axes, 13 buttons, 1 POV, attached, no force feedback.
@@ -628,6 +628,32 @@ static void enum_objects_cb(X86 *c) {
     if (type & 0x10)
         ++g_obj_povs;
     set_eax(c, 1);
+}
+
+// DirectInput's default range for an absolute axis is 0..65535, centred at
+// 32768. A game that never sets a range reads its stick against 32768: with
+// -32768..32767 the stick at rest read as pushed to one corner, which held
+// two directions down for good.
+static void test_joy_default_range() {
+    uint32_t dev = make_joystick(SDK_DIJOYSTATE);
+    uint32_t p = sc(0x100);
+    gm_zero(p, SDK_DIPROPRANGE);
+    wr32(p, SDK_DIPROPRANGE);
+    wr32(p + 4, 16);
+    wr32(p + 8, 0);
+    wr32(p + 12, PH_BYOFFSET);
+    CHECK_EQ(call_method(dev, DID_GetProperty, {PROP_RANGE, p}), DI_OK);
+    CHECK_EQ((int32_t)rd32(p + 16), 0);
+    CHECK_EQ((int32_t)rd32(p + 20), 65535);
+    g_pad.lx = 0;
+    g_pad.ly = 0;
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 32768);
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 4), 32768);
+    g_pad.lx = 32767;
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 0), 65535);
+    g_pad.ly = -32767;
+    CHECK_EQ(read_state_axis(dev, SDK_DIJOYSTATE, 4), 0);
+    g_pad.lx = g_pad.ly = 0;
 }
 
 static void test_joy_objects() {
@@ -740,7 +766,7 @@ static void test_joy_device_data() {
     CHECK_EQ(call_method(dev, DID_GetDeviceData, {N, out, inout, 0}), DI_OK);
     CHECK_EQ(rd32(inout), 1u);
     CHECK_EQ(rd32(out + 0), 0u);
-    CHECK_EQ((int32_t)rd32(out + 4), -32768);
+    CHECK_EQ((int32_t)rd32(out + 4), 0);
 
     // The DirectInput 8 stride carries uAppData.
     pad_edge(0, 2, 1); // square: button 0
@@ -812,8 +838,8 @@ static void test_joy_custom_format() {
     uint32_t st = sc(0x400);
     memset(gm_ptr(st), 0x5A, 16);
     CHECK_EQ(call_method(dev, DID_GetDeviceState, {16, st}), DI_OK);
-    CHECK_EQ((int32_t)rd32(st + 0), -32768);
-    CHECK_EQ((int32_t)rd32(st + 4), 32767);
+    CHECK_EQ((int32_t)rd32(st + 0), 0);
+    CHECK_EQ((int32_t)rd32(st + 4), 65535);
     CHECK_EQ(rd8(st + 8), 0x80u);
     CHECK_EQ(rd8(st + 9), 0u);
     CHECK_EQ(rd8(st + 10), 0x5Au);
@@ -1013,6 +1039,58 @@ static void test_xinput() {
     CHECK_EQ(tramp("xinput9_1_0.dll", "XInputGetKeystroke"), 0u);
 }
 
+// The keyboard's objects: one button per key, GUID_Key, dwOfs the DIK code.
+// A game may learn the highest key code from this enumeration and treat
+// every key above it as up; with nothing enumerated every key reads as up.
+static uint32_t g_kobj_calls = 0, g_kobj_max_ofs = 0, g_kobj_bad = 0, g_kobj_stop_after = 0;
+static bool g_kobj_seen[256];
+static void enum_key_objects_cb(X86 *c) {
+    static const uint8_t guid_key[16] = {0x20, 0x82, 0x72, 0x55, 0x3C, 0xD3, 0xCF, 0x11,
+                                         0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    uint32_t o = arg(c, 0);
+    ++g_kobj_calls;
+    uint32_t ofs = rd32(o + 20), type = rd32(o + 24);
+    if (memcmp(gm_ptr(o + 4), guid_key, 16) != 0 || !(type & 0x04) ||
+        ((type >> 8) & 0xffff) != ofs || ofs > 255 || !gm_ptr(o + 32)[0])
+        ++g_kobj_bad;
+    if (ofs < 256)
+        g_kobj_seen[ofs] = true;
+    g_kobj_max_ofs = std::max(g_kobj_max_ofs, ofs);
+    set_eax(c, g_kobj_stop_after && g_kobj_calls >= g_kobj_stop_after ? 0 : 1);
+}
+static void test_keyboard_objects() {
+    cpu_reset();
+    pad_reset();
+    static uint32_t cb =
+        imports_alloc_trampoline("TEST", "EnumKeyObjectsCb", enum_key_objects_cb, 2);
+    uint32_t di = make_dinput8(0x0800);
+    CHECK(di != 0);
+    static const uint8_t guid_syskeyboard[16] = {0x61, 0x2B, 0x1D, 0x6F, 0xA0, 0xD5, 0xCF, 0x11,
+                                                 0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00};
+    memcpy(gm_ptr(sc(0x40)), guid_syskeyboard, 16);
+    wr32(sc(0x50), 0);
+    CHECK_EQ(call_method(di, DI_CreateDevice, {sc(0x40), sc(0x50), 0}), DI_OK);
+    uint32_t kb = rd32(sc(0x50));
+    CHECK(kb != 0);
+    if (!kb)
+        return;
+    memset(g_kobj_seen, 0, sizeof g_kobj_seen);
+    g_kobj_calls = g_kobj_max_ofs = g_kobj_bad = g_kobj_stop_after = 0;
+    CHECK_EQ(call_method(kb, DID_EnumObjects, {cb, 0, 0 /* DIDFT_ALL */}), DI_OK);
+    CHECK(g_kobj_calls >= 100);
+    CHECK_EQ(g_kobj_bad, 0u);
+    CHECK(g_kobj_max_ofs >= 0xD0); // DIK_DOWN and the other cursor keys
+    CHECK(g_kobj_seen[0x01] && g_kobj_seen[0x1C] && g_kobj_seen[0x2D] && g_kobj_seen[0x39]);
+    CHECK(g_kobj_seen[0xC8] && g_kobj_seen[0xCB] && g_kobj_seen[0xCD] && g_kobj_seen[0xD0]);
+    g_kobj_calls = 0;
+    CHECK_EQ(call_method(kb, DID_EnumObjects, {cb, 0, 3 /* DIDFT_AXIS */}), DI_OK);
+    CHECK_EQ(g_kobj_calls, 0u);
+    g_kobj_calls = 0;
+    g_kobj_stop_after = 3; // DIENUM_STOP after the third
+    CHECK_EQ(call_method(kb, DID_EnumObjects, {cb, 0, 0xC /* DIDFT_BUTTON */}), DI_OK);
+    CHECK_EQ(g_kobj_calls, 3u);
+}
+
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     mem_init();
@@ -1033,7 +1111,9 @@ int main() {
         {"joystick pure helpers", test_joy_pure_helpers},
         {"joystick enumeration", test_joy_enum_devices},
         {"joystick through DirectInput 8", test_joy_dinput8},
+        {"keyboard objects", test_keyboard_objects},
         {"joystick state", test_joy_device_state},
+        {"joystick default axis range", test_joy_default_range},
         {"joystick objects", test_joy_objects},
         {"joystick buffered data", test_joy_device_data},
         {"joystick custom format", test_joy_custom_format},

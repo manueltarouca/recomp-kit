@@ -293,6 +293,12 @@ VulkanDevice::~VulkanDevice() {
         destroy_tex(g.tex);
         destroy_buf(g.buf);
     }
+    for (auto &t : spare_textures_)
+        destroy_tex(t);
+    spare_textures_.clear();
+    for (auto &b : spare_bufs_)
+        destroy_buf(b);
+    spare_bufs_.clear();
     if (dummy_buffer_.buffer) {
         vkDestroyBuffer(device_, dummy_buffer_.buffer, nullptr);
         vkFreeMemory(device_, dummy_buffer_.memory, nullptr);
@@ -358,8 +364,14 @@ bool VulkanDevice::allocate(VkMemoryRequirements req, VkMemoryPropertyFlags want
     return vkAllocateMemory(device_, &mai, nullptr, out) == VK_SUCCESS;
 }
 
+// cached: the CPU reads this buffer back. The first HOST_VISIBLE|HOST_COHERENT
+// type is often uncached write-combined memory (NVIDIA lists it before the
+// HOST_CACHED one in the same heap), where every CPU read stalls on the bus:
+// the per-frame guest readback spent ~70% of in-level CPU reading one. Prefer a
+// cached type for read-back buffers and fall back when the device has none.
 static bool make_host_buffer(VulkanDevice &d, uint64_t bytes, VkBufferUsageFlags usage,
-                             VkBuffer *buffer, VkDeviceMemory *memory, void **map) {
+                             VkBuffer *buffer, VkDeviceMemory *memory, void **map,
+                             bool cached = false) {
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bci.size = std::max<uint64_t>(bytes, 16);
     bci.usage = usage;
@@ -368,8 +380,11 @@ static bool make_host_buffer(VulkanDevice &d, uint64_t bytes, VkBufferUsageFlags
         return false;
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(d.device_, *buffer, &req);
-    if (!d.allocate(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    memory) ||
+    const VkMemoryPropertyFlags host =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    const bool got_cached =
+        cached && d.allocate(req, host | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, memory);
+    if ((!got_cached && !d.allocate(req, host, memory)) ||
         vkBindBufferMemory(d.device_, *buffer, *memory, 0) != VK_SUCCESS ||
         vkMapMemory(d.device_, *memory, 0, VK_WHOLE_SIZE, 0, map) != VK_SUCCESS) {
         vkDestroyBuffer(d.device_, *buffer, nullptr);
@@ -444,6 +459,24 @@ Texture VulkanDevice::create_texture(const TextureDesc &desc) {
              w = std::max(1, w / 2), h = std::max(1, h / 2))
             ++levels;
     t.desc.mip_levels = levels;
+    {
+        // A retired texture of the same shape skips the image, memory and
+        // staging allocations. Its contents are undefined, like a new image's;
+        // it is already in GENERAL and no submitted work references it.
+        std::lock_guard lock(mutex_);
+        for (auto it = spare_textures_.begin(); it != spare_textures_.end(); ++it) {
+            const TextureDesc &d = it->desc;
+            if (d.width == t.desc.width && d.height == t.desc.height && d.format == t.desc.format &&
+                d.usage == t.desc.usage && d.mip_levels == levels) {
+                Tex reuse = *it;
+                spare_bytes_ -= reuse.bytes + reuse.staging_bytes;
+                spare_textures_.erase(it);
+                uint64_t id = next_id_++;
+                textures_[id] = reuse;
+                return {id};
+            }
+        }
+    }
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = vk_format(desc.format);
@@ -533,6 +566,47 @@ void VulkanDevice::destroy_tex(Tex &t) {
     t = Tex{};
 }
 
+// Texture churn (a new texture per guest texture revision) otherwise costs an
+// image, a device allocation and often a host staging allocation per revision,
+// and the driver serialises those against the guest's own GPU calls. Keep a
+// bounded set of retired textures for create_texture to hand back out.
+void VulkanDevice::recycle(Tex &t) {
+    constexpr uint64_t kSpareBytes = 256ull << 20;
+    const uint64_t bytes = t.bytes + t.staging_bytes;
+    if (t.external || !t.image || bytes > kSpareBytes / 4) {
+        destroy_tex(t);
+        return;
+    }
+    while (!spare_textures_.empty() && spare_bytes_ + bytes > kSpareBytes) {
+        Tex &old = spare_textures_.front();
+        spare_bytes_ -= old.bytes + old.staging_bytes;
+        destroy_tex(old);
+        spare_textures_.pop_front();
+    }
+    spare_bytes_ += bytes;
+    spare_textures_.push_back(t);
+    t = Tex{};
+}
+
+// Each upload used to allocate, map and free its own staging buffer; under
+// heavy texture churn (raise land: hundreds per frame) the allocation ioctls
+// left the guest thread blocked in the driver most of the frame.
+void VulkanDevice::recycle(Buf &b) {
+    constexpr uint64_t kSpareBytes = 128ull << 20;
+    if (!b.spare || !b.buffer || b.bytes > kSpareBytes / 4) {
+        destroy_buf(b);
+        return;
+    }
+    while (!spare_bufs_.empty() && spare_buf_bytes_ + b.bytes > kSpareBytes) {
+        spare_buf_bytes_ -= spare_bufs_.front().bytes;
+        destroy_buf(spare_bufs_.front());
+        spare_bufs_.pop_front();
+    }
+    spare_buf_bytes_ += b.bytes;
+    spare_bufs_.push_back(b);
+    b = Buf{};
+}
+
 void VulkanDevice::destroy_buf(Buf &b) {
     if (b.buffer)
         vkDestroyBuffer(device_, b.buffer, nullptr);
@@ -550,8 +624,8 @@ void VulkanDevice::bury(Tex tex, Buf buf) {
     for (auto &s : submitted_)
         g.waits.push_back(s.id);
     if (g.waits.empty()) {
-        destroy_tex(g.tex);
-        destroy_buf(g.buf);
+        recycle(g.tex);
+        recycle(g.buf);
         return;
     }
     graves_.push_back(std::move(g));
@@ -562,8 +636,8 @@ void VulkanDevice::retire_graves(uint64_t cmd_id) {
         auto &w = graves_[i].waits;
         w.erase(std::remove(w.begin(), w.end(), cmd_id), w.end());
         if (w.empty()) {
-            destroy_tex(graves_[i].tex);
-            destroy_buf(graves_[i].buf);
+            recycle(graves_[i].tex);
+            recycle(graves_[i].buf);
             graves_[i] = std::move(graves_.back());
             graves_.pop_back();
         } else {
@@ -596,10 +670,27 @@ bool VulkanDevice::upload(Texture tex, Region region, const void *bytes, int pit
     // pending transfer buffer, so the shared staging cannot be reused yet.
     // The graveyard frees it once that buffer has retired.
     Buf staging;
-    staging.bytes = total;
-    if (!make_host_buffer(*this, total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &staging.buffer,
-                          &staging.memory, &staging.map))
-        return false;
+    uint64_t size = 64 << 10;
+    while (size < total)
+        size <<= 1;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto it = spare_bufs_.begin(); it != spare_bufs_.end(); ++it) {
+            if (it->bytes == size) {
+                staging = *it;
+                spare_buf_bytes_ -= it->bytes;
+                spare_bufs_.erase(it);
+                break;
+            }
+        }
+    }
+    if (!staging.buffer) {
+        staging.bytes = size;
+        staging.spare = true;
+        if (!make_host_buffer(*this, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &staging.buffer,
+                              &staging.memory, &staging.map))
+            return false;
+    }
     for (int y = 0; y < region.h; ++y)
         memcpy(static_cast<uint8_t *>(staging.map) + y * row,
                static_cast<const uint8_t *>(bytes) + uint64_t(y) * pitch, size_t(row));
@@ -640,8 +731,8 @@ bool VulkanDevice::readback(Texture tex, Region region, void *bytes, int pitch) 
     VkDeviceMemory dst_mem = VK_NULL_HANDLE;
     void *map = t.staging_map;
     const bool transient = !dst || total > t.staging_bytes;
-    if (transient &&
-        !make_host_buffer(*this, total, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &dst, &dst_mem, &map))
+    if (transient && !make_host_buffer(*this, total, VK_BUFFER_USAGE_TRANSFER_DST_BIT, &dst,
+                                       &dst_mem, &map, true))
         return false;
     VkCommandBuffer cb = one_shot_begin();
     full_barrier(cb);
@@ -757,7 +848,7 @@ Buffer VulkanDevice::create_buffer(uint64_t bytes, const void *contents) {
     if (!make_host_buffer(*this, bytes,
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                               VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                          &b.buffer, &b.memory, &b.map))
+                          &b.buffer, &b.memory, &b.map, true))
         return {};
     if (contents && bytes)
         memcpy(b.map, contents, size_t(bytes));

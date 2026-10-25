@@ -7,9 +7,47 @@
   GetTickCount spin that sees no time pass sleeps 1 ms cooperatively, and the
   SDL idle service pumps events at most every 4 ms.
 
+- Keep 250 ms of streamed QMixer audio queued ahead of each voice
+  (`RECOMP_QMIX_LEAD_MS`), so a long guest frame no longer lets a stream run
+  dry with an audible gap.
+
 - Group a frame's UI blit records with a left-to-right sweep instead of
   testing every pair. Menus with hundreds of small blits no longer stall
   the presenter.
+
+- Reuse retired Vulkan textures, upload staging buffers and replay
+  checkpoint buffers instead of allocating new ones per texture revision,
+  and read back through cached host memory. Texture-heavy scenes no longer
+  stall the guest in the driver's allocator. The presenter paces repeats of
+  an unchanged frame to the display refresh and reuses composite targets.
+
+- A full-screen 2D image blitted to a 3D device's target before any draw is
+  presented whole, instead of as separately anchored UI pieces.
+
+- Linux fault reports include the host's stack frames.
+
+- Default DirectInput joystick axes to DirectInput's own range, 0..65535 centred
+  at 32768, instead of -32768..32767. A game that never sets `DIPROP_RANGE`
+  read a centred stick as pushed to one corner. Fixes #12.
+
+- Enumerate the keyboard's keys in `IDirectInputDevice::EnumObjects`. It
+  returned success without calling back, so a game that sizes its key table
+  from the enumeration ignored every key. Fixes #13.
+
+- Make `PulseEvent` release the threads waiting on the event (all of them for
+  a manual-reset event, one for an auto-reset event) and leave it
+  unsignalled. It released nobody, so middleware that wakes a server thread
+  this way (CRI ADX) stalled. Fixes #15.
+
+- Register `CLSID_DirectSound8` and `IID_IDirectSound8` (IDirectSound plus
+  `VerifyCertification`) over the existing DirectSound object. A game that
+  made its DirectSound through `CoCreateInstance` with them ran without
+  sound. Fixes #22.
+
+- Draw ps.1.x `texm3x2pad`/`texm3x2tex` in the shader decoder, the CPU
+  interpreter and the generated MSL/GLSL/WGSL, and bind the stage that
+  `texm3x2tex` samples: the sampler mask counted only `tex`/`texldl`, so on
+  Metal it sampled black. Fixes #20.
 
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput

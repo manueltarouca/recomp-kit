@@ -782,7 +782,39 @@ void QSWaveMixSetOptions(X86 *c) {
 // by hand, and this one does not - zero calls in a whole run. Everything here
 // re-enters translated code through the guest callback, so it may only run on
 // a thread holding the scheduler baton, which is what the frame pump is.
+// Audio a queued stream keeps in front of the voice, in milliseconds. The
+// pump only runs between guest frames, so one chunk of slack ran dry whenever
+// a frame took longer than a chunk lasts, and every hitch was an audible gap.
+// RECOMP_QMIX_LEAD_MS overrides it; 0 restores the one-chunk threshold.
+int &lead_cache() {
+    static int v = -1;
+    return v;
+}
+
+uint32_t stream_lead_ms() {
+    int &v = lead_cache();
+    if (v < 0) {
+        v = 250;
+        if (const char *e = recomp_env("QMIX_LEAD_MS"))
+            v = (int)strtoul(e, nullptr, 10);
+    }
+    return (uint32_t)v;
+}
+
+void pump_streams_once(X86 *c, bool *queued_any);
+
 void pump_streams(X86 *c) {
+    // A lead longer than a chunk needs several pulls; bound the rounds so a
+    // callback that never fills cannot hold the frame.
+    for (int round = 0; round < 8; ++round) {
+        bool queued_any = false;
+        pump_streams_once(c, &queued_any);
+        if (!queued_any)
+            break;
+    }
+}
+
+void pump_streams_once(X86 *c, bool *queued_any) {
     for (Channel &ch : channels()) {
         if (!ch.playing || !ch.stream_wave || ch.audio_channel < 0)
             continue;
@@ -841,7 +873,16 @@ void pump_streams(X86 *c) {
             uint32_t ahead = gate_reads_queue()
                                  ? host_audio_queued_bytes(ch.audio_channel)
                                  : host_audio_voice_remaining_bytes(ch.audio_channel);
-            if (ahead >= w->chunk_bytes) {
+            // An ended stream keeps the one-chunk test: it decides when the
+            // last buffer has been heard, and a longer lead would end it early.
+            uint32_t target = w->chunk_bytes;
+            if (!ch.stream_ended) {
+                const uint32_t rate = ch.frequency ? ch.frequency : w->rate;
+                const uint64_t lead = uint64_t(rate) * align * stream_lead_ms() / 1000;
+                if (lead > target)
+                    target = uint32_t(lead - lead % align);
+            }
+            if (ahead >= target) {
                 ++counters().pump_skipped;
                 continue;
             }
@@ -894,6 +935,7 @@ void pump_streams(X86 *c) {
                 ++counters().host_queues_refused;
         }
         if (taken > 0) {
+            *queued_any = true;
             ch.stream_feed = Channel::FEED_QUEUE;
             ch.stream_submitted = (uint32_t)taken;
             announce_once(&ch, w, w->buffer, got);
@@ -1494,6 +1536,7 @@ const ImportShim g_qmixer_shims[] = {
 // tens of thousands of times a run.
 void qmixer_gate_reset_for_test() {
     gate_cache() = -1;
+    lead_cache() = -1;
 }
 
 // The frame pump. Registered by dx_register_shims and run from the guest's own

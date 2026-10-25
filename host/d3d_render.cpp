@@ -622,12 +622,18 @@ struct ReplayJournal {
     gpu::Buffer checkpoint[3];
     uint64_t pitch[3] = {0, 0, 0};
     int width = 0, height = 0;
-    void reset(gpu::Device *device) {
+    // pool: when given, the checkpoint buffers are handed back for reuse rather
+    // than destroyed. retireFrame resets a slot every frame, and recreating three
+    // render-target-sized buffers per checkpoint (allocate, page in, zero fill)
+    // was the largest in-level cost after the readback copy.
+    void reset(gpu::Device *device, std::vector<gpu::Buffer> *pool = nullptr) {
         seed.clear();
         steps.clear();
         hasPalette = done = pendingCheckpoint = false;
         for (auto &buffer : checkpoint) {
-            if (device && buffer)
+            if (pool && buffer)
+                pool->push_back(buffer);
+            else if (device && buffer)
                 device->destroy(buffer);
             buffer = {};
         }
@@ -846,6 +852,10 @@ struct D3DRenderer::Impl {
         uint64_t frame = 0;
     };
     std::vector<ArgumentBuffer> argument_pool_;
+    // Retired replay checkpoint buffers, reused by size (see ReplayJournal::reset).
+    // Each new copy into one is preceded by a full barrier, so reuse is ordered
+    // after any earlier GPU work on it.
+    std::vector<gpu::Buffer> checkpoint_pool_;
     size_t argument_cursor_ = 0;
 
     explicit Impl(gpu::Device *device);
@@ -1066,6 +1076,9 @@ D3DRenderer::Impl::~Impl() {
     }
     for (int i = 0; i < kSceneSlots; ++i)
         releaseSlot(i);
+    for (gpu::Buffer b : checkpoint_pool_)
+        device_->destroy(b);
+    checkpoint_pool_.clear();
     releaseMirror();
     if (white_)
         device_->destroy(white_);
@@ -1194,6 +1207,9 @@ void D3DRenderer::Impl::discard() {
     acquiringTarget_ = {};
     for (int i = 0; i < kSceneSlots; ++i)
         releaseSlot(i);
+    for (gpu::Buffer b : checkpoint_pool_)
+        device_->destroy(b);
+    checkpoint_pool_.clear();
     releaseMirror();
     for (auto &slot : slots_)
         slot = SceneSlot{};
@@ -1914,7 +1930,7 @@ void D3DRenderer::Impl::retireFrame(uint64_t f) {
                 device_->wait(slot.last);
             slot.frame = 0;
             slot.unclaimed = false;
-            slot.replay.reset(device_);
+            slot.replay.reset(device_, &checkpoint_pool_);
             if (!host_d3d_dirty_rect(slot.surface.id, slot.generation, nullptr))
                 slot.coherenceLease.reset();
         }
@@ -3119,9 +3135,26 @@ void D3DRenderer::Impl::captureReplayCheckpoint(bool needed) {
     gpu::Texture textures[] = {color_, depth_, coverage_};
     for (int k = 0; k < 3; ++k) {
         j.pitch[k] = ((uint64_t)width_ * (k == 2 ? 1 : 4) + 255) & ~uint64_t(255);
-        if (j.checkpoint[k])
+        const uint64_t bytes = j.pitch[k] * height_;
+        if (j.checkpoint[k] && device_->buffer_bytes(j.checkpoint[k]) != bytes) {
             device_->destroy(j.checkpoint[k]);
-        j.checkpoint[k] = device_->create_buffer(j.pitch[k] * height_, nullptr);
+            j.checkpoint[k] = {};
+        }
+        if (!j.checkpoint[k]) {
+            auto reuse =
+                std::find_if(checkpoint_pool_.begin(), checkpoint_pool_.end(),
+                             [&](gpu::Buffer b) { return device_->buffer_bytes(b) == bytes; });
+            if (reuse != checkpoint_pool_.end()) {
+                j.checkpoint[k] = *reuse;
+                checkpoint_pool_.erase(reuse);
+            } else
+                j.checkpoint[k] = device_->create_buffer(bytes, nullptr);
+        }
+        // Bound what the pool keeps: two frames' worth of colour/depth/coverage.
+        while (checkpoint_pool_.size() > 6) {
+            device_->destroy(checkpoint_pool_.front());
+            checkpoint_pool_.erase(checkpoint_pool_.begin());
+        }
         if (!j.checkpoint[k]) {
             fprintf(stderr, "[host] replay checkpoint allocation failed\n");
             abort();

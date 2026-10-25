@@ -2844,6 +2844,50 @@ static void creation_polling_wndproc(X86 *c) {
     set_eax(c, 1);
 }
 
+// These event contracts need only synthetic guest threads and import shims,
+// so CI exercises pulses even when no original game image is installed.
+static void test_pulse_events(X86 *c) {
+    section("PulseEvent scheduling contracts");
+    uint32_t pcode = scratch_block(4);
+    uint32_t wfn = imports_alloc_trampoline("test", "pulse_waiter", fake_waiter_thread, 1);
+    // --- PulseEvent: releases who waits now, then leaves it unsignalled -----
+    // The CRI ADX sound middleware wakes its server thread with PulseEvent.
+    g_shared_event = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 1, 0, 0}); // manual
+    g_wait_done = 0;
+    uint32_t pa = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    uint32_t pb = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    for (int i = 0; i < 4; ++i) // a pulse finds only threads already waiting
+        call_import(c, "KERNEL32.dll", "Sleep", {5});
+    check(g_wait_done == 0, "both waiters are blocked on the manual-reset event");
+    check(call_import(c, "KERNEL32.dll", "PulseEvent", {g_shared_event}) == 1,
+          "PulseEvent succeeds");
+    check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {g_shared_event, 0}) == 0x102,
+          "and leaves the event unsignalled");
+    poll_exit_code(c, pa, pcode, 400);
+    poll_exit_code(c, pb, pcode, 400);
+    check(g_wait_done == 2 && g_wait_results[0] == 0 && g_wait_results[1] == 0,
+          "a pulse of a manual-reset event released both waiters (%u done, %x %x)", g_wait_done,
+          g_wait_results[0], g_wait_results[1]);
+    g_shared_event = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 0, 0, 0}); // auto
+    g_wait_done = 0;
+    pa = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    pb = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    for (int i = 0; i < 4; ++i) // a pulse finds only threads already waiting
+        call_import(c, "KERNEL32.dll", "Sleep", {5});
+    g_wait_results[0] = g_wait_results[1] = 0xdead;
+    call_import(c, "KERNEL32.dll", "PulseEvent", {g_shared_event});
+    for (int i = 0; i < 200 && g_wait_done < 2; ++i) // the other times out at 400 ms
+        call_import(c, "KERNEL32.dll", "Sleep", {5});
+    poll_exit_code(c, pa, pcode, 400);
+    poll_exit_code(c, pb, pcode, 400);
+    check(g_wait_done == 2 && ((g_wait_results[0] == 0) != (g_wait_results[1] == 0)),
+          "a pulse of an auto-reset event released exactly one; the other timed out (%x %x)",
+          g_wait_results[0], g_wait_results[1]);
+    call_import(c, "KERNEL32.dll", "PulseEvent", {g_shared_event});
+    check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {g_shared_event, 0}) == 0x102,
+          "a pulse with nobody waiting signals nothing");
+}
+
 static void test_scheduling(X86 *c) {
     section("cooperative scheduling contracts");
     uint32_t pcode = scratch_block(4);
@@ -3036,6 +3080,8 @@ static void test_scheduling(X86 *c) {
     poll_exit_code(c, wa, pcode, 400);
     poll_exit_code(c, wb, pcode, 400);
     check(g_wait_done == 2, "the second signal released the other one");
+
+    test_pulse_events(c);
 
     // --- a mutex its owner never released is abandoned ----------------------
     g_abandon_mutex = call_import(c, "KERNEL32.dll", "CreateMutexA", {0, 0, 0});
@@ -6632,6 +6678,17 @@ int main(int argc, char **argv) {
     os_setenv("RECOMP_REGISTRY", "build/recomp/registry-test.json");
     if (!recomp_env("LOG"))
         os_setenv("RECOMP_LOG", "1");
+    if (argc == 2 && strcmp(argv[1], "--pulse-only") == 0) {
+        mem_init();
+        imports_init();
+        win32_init(".");
+        X86 *c = loader_context();
+        loader_init_context(c);
+        scratch = 0x0ee00000;
+        test_pulse_events(c);
+        printf("PulseEvent: %d checks, %d failures\n", g_checks, g_failures);
+        return g_failures ? 1 : 0;
+    }
     // The suite loads the developer's game image; without one (the kit's
     // stub game, a checkout with no original/) there is nothing to test.
     if (FILE *image = fopen(RECOMP_DEVELOPER_EXE, "rb"))
