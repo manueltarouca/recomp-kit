@@ -34,6 +34,11 @@
   returned success without calling back, so a game that sizes its key table
   from the enumeration ignored every key. Fixes #13.
 
+- Make `PulseEvent` release the threads waiting on the event (all of them for
+  a manual-reset event, one for an auto-reset event) and leave it
+  unsignalled. It released nobody, so middleware that wakes a server thread
+  this way (CRI ADX) stalled. Fixes #15.
+
 - Allow native game adapters to place their own cursors at absolute touch
   positions in logical game pixels. Placement can discard pending DirectInput
   X/Y movement without losing button, wheel or keyboard input.

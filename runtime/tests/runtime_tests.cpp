@@ -3037,6 +3037,43 @@ static void test_scheduling(X86 *c) {
     poll_exit_code(c, wb, pcode, 400);
     check(g_wait_done == 2, "the second signal released the other one");
 
+    // --- PulseEvent: releases who waits now, then leaves it unsignalled -----
+    // The CRI ADX sound middleware wakes its server thread with PulseEvent.
+    g_shared_event = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 1, 0, 0}); // manual
+    g_wait_done = 0;
+    uint32_t pa = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    uint32_t pb = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    for (int i = 0; i < 4; ++i) // a pulse finds only threads already waiting
+        call_import(c, "KERNEL32.dll", "Sleep", {5});
+    check(g_wait_done == 0, "both waiters are blocked on the manual-reset event");
+    check(call_import(c, "KERNEL32.dll", "PulseEvent", {g_shared_event}) == 1,
+          "PulseEvent succeeds");
+    check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {g_shared_event, 0}) == 0x102,
+          "and leaves the event unsignalled");
+    poll_exit_code(c, pa, pcode, 400);
+    poll_exit_code(c, pb, pcode, 400);
+    check(g_wait_done == 2 && g_wait_results[0] == 0 && g_wait_results[1] == 0,
+          "a pulse of a manual-reset event released both waiters (%u done, %x %x)", g_wait_done,
+          g_wait_results[0], g_wait_results[1]);
+    g_shared_event = call_import(c, "KERNEL32.dll", "CreateEventA", {0, 0, 0, 0}); // auto
+    g_wait_done = 0;
+    pa = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    pb = call_import(c, "KERNEL32.dll", "CreateThread", {0, 0, wfn, 0, 0, 0});
+    for (int i = 0; i < 4; ++i) // a pulse finds only threads already waiting
+        call_import(c, "KERNEL32.dll", "Sleep", {5});
+    g_wait_results[0] = g_wait_results[1] = 0xdead;
+    call_import(c, "KERNEL32.dll", "PulseEvent", {g_shared_event});
+    for (int i = 0; i < 200 && g_wait_done < 2; ++i) // the other times out at 400 ms
+        call_import(c, "KERNEL32.dll", "Sleep", {5});
+    poll_exit_code(c, pa, pcode, 400);
+    poll_exit_code(c, pb, pcode, 400);
+    check(g_wait_done == 2 && ((g_wait_results[0] == 0) != (g_wait_results[1] == 0)),
+          "a pulse of an auto-reset event released exactly one; the other timed out (%x %x)",
+          g_wait_results[0], g_wait_results[1]);
+    call_import(c, "KERNEL32.dll", "PulseEvent", {g_shared_event});
+    check(call_import(c, "KERNEL32.dll", "WaitForSingleObject", {g_shared_event, 0}) == 0x102,
+          "a pulse with nobody waiting signals nothing");
+
     // --- a mutex its owner never released is abandoned ----------------------
     g_abandon_mutex = call_import(c, "KERNEL32.dll", "CreateMutexA", {0, 0, 0});
     uint32_t abfn =
