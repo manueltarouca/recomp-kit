@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Honor GetDIBits' requested pixel depth, bitfield masks, row orientation and
+  padded stride instead of copying the source bitmap's backing rows. Check
+  output bounds and partial scans before writes, preserving adjacent guest data.
+
 - Validate two-parameter tail-call references during speculative-block
   withdrawal and the final translation gate, so missing targets are handled
   before native compilation.

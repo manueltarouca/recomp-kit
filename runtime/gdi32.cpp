@@ -109,6 +109,7 @@ struct Dib {
     uint32_t masks[3] = {0, 0, 0};
     std::vector<uint32_t> colors; // RGBQUADs for bpp <= 8
 };
+uint32_t get_dibits(X86 *c);
 
 struct Palette {
     std::vector<uint32_t> entries; // PALETTEENTRYs
@@ -624,31 +625,9 @@ void g_SetSystemPaletteUse(X86 *c) {
     set_eax(c, 1); // the previous use
 }
 
-// GetDIBits(hdc, hbm, start, lines, bits, bmi, usage): the rows as stored.
+// GetDIBits extracts rows in the caller's requested DIB format.
 void g_GetDIBits(X86 *c) {
-    Dib *d = dib_of(arg(c, 1));
-    uint32_t start = arg(c, 2), lines = arg(c, 3), out = arg(c, 4), bmi = arg(c, 5);
-    if (!d) {
-        set_eax(c, 0);
-        return;
-    }
-    uint32_t rows = (uint32_t)(d->height < 0 ? -d->height : d->height);
-    if (!out) {
-        if (bmi && gm_valid(bmi, 40)) {
-            wr32(bmi + 4, (uint32_t)d->width);
-            wr32(bmi + 8, (uint32_t)d->height);
-            wr16(bmi + 12, 1);
-            wr16(bmi + 14, d->bpp);
-            wr32(bmi + 16, d->compression);
-            wr32(bmi + 20, d->size);
-        }
-        set_eax(c, rows);
-        return;
-    }
-    uint32_t n = 0;
-    for (; n < lines && start + n < rows; ++n)
-        memcpy(g_mem + out + n * d->stride, g_mem + d->bits + (start + n) * d->stride, d->stride);
-    set_eax(c, n);
+    set_eax(c, get_dibits(c));
 }
 
 // Report the display dimensions and 32-bit canvas capabilities. The indexed
@@ -1826,6 +1805,96 @@ struct DibDc {
         dibs().erase(bitmap);
     }
 };
+// Decode the output descriptor before touching pixels. In particular, a
+// 24-bpp caller owns 24-bpp padded rows even when the bitmap is backed by
+// 32-bpp storage. Copying the backing stride overwrites adjacent guest objects.
+uint32_t get_dibits(X86 *c) {
+    Dib *source = dib_of(arg(c, 1));
+    uint32_t start = arg(c, 2), count = arg(c, 3), out = arg(c, 4), bmi = arg(c, 5),
+             usage = arg(c, 6);
+    if (!source || !bmi || !gm_valid(bmi, 40) || rd32(bmi) < 40 || !gm_valid(bmi, rd32(bmi)) ||
+        usage > 1)
+        return 0;
+    const uint32_t rows = uint32_t(std::abs(int64_t(source->height)));
+    if (!out && !rd16(bmi + 14)) {
+        wr32(bmi + 4, uint32_t(source->width));
+        wr32(bmi + 8, uint32_t(source->height));
+        wr16(bmi + 12, 1);
+        wr16(bmi + 14, source->bpp);
+        wr32(bmi + 16, source->compression);
+        wr32(bmi + 20, source->size);
+        wr32(bmi + 32, uint32_t(source->colors.size()));
+        return rows;
+    }
+    if (!out) {
+        bool top = int32_t(rd32(bmi + 8)) < 0;
+        wr32(bmi + 4, uint32_t(source->width));
+        wr32(bmi + 8, uint32_t(top ? -int32_t(rows) : int32_t(rows)));
+        wr16(bmi + 12, 1);
+    }
+    Dib dest;
+    if (!describe_dib(bmi, usage, arg(c, 0), &dest) || dest.width != source->width ||
+        uint32_t(std::abs(int64_t(dest.height))) != rows)
+        return 0;
+    // Native indexed extraction retains its color table and indices. Palette
+    // synthesis for a different indexed depth is not modeled; fail explicitly.
+    if (dest.bpp <= 8) {
+        if (dest.bpp != source->bpp || usage != 0)
+            return 0;
+        for (uint32_t i = 0; i < dest.colors.size(); ++i) {
+            dest.colors[i] = i < source->colors.size() ? source->colors[i] : i ? 0xffffff : 0;
+            wr32(bmi + rd32(bmi) + 4 * i, dest.colors[i]);
+        }
+    }
+    wr32(bmi + 20, dest.size);
+    if (!out)
+        return rows;
+    if (start >= rows)
+        return 0;
+    count = std::min(count, rows - start);
+    if (!count || !gm_valid(out, count * dest.stride) || !gm_valid(source->bits, source->size))
+        return 0;
+    bool top = dest.height < 0;
+    if (source->bpp == dest.bpp && source->compression == dest.compression &&
+        std::equal(std::begin(source->masks), std::end(source->masks), std::begin(dest.masks))) {
+        // Snapshot overlapping buffers so flipping row orientation cannot
+        // overwrite a source scan that is still needed.
+        std::vector<uint8_t> snapshot;
+        const uint8_t *bits = g_mem + source->bits;
+        if (uint64_t(out) < uint64_t(source->bits) + source->size &&
+            uint64_t(source->bits) < uint64_t(out) + count * dest.stride) {
+            snapshot.assign(bits, bits + source->size);
+            bits = snapshot.data();
+        }
+        for (uint32_t scan = 0; scan < count; ++scan) {
+            uint32_t y = top ? start + scan : rows - 1 - start - scan;
+            uint32_t stored = source->height < 0 ? y : rows - 1 - y;
+            memcpy(g_mem + out + scan * dest.stride, bits + stored * source->stride, dest.stride);
+        }
+        return count;
+    }
+    GdiImage image;
+    image.width = source->width;
+    image.height = int32_t(rows);
+    image.pixels.resize(size_t(image.width) * rows);
+    DibDc input(*source);
+    for (uint32_t y = 0; y < rows; ++y)
+        for (int32_t x = 0; x < image.width; ++x)
+            if (!read_pixel(input.dc, x, y, &image.pixels[size_t(y) * image.width + x], true))
+                return 0;
+    dest.bits = out;
+    dest.size = count * dest.stride;
+    dest.height = top ? -int32_t(count) : int32_t(count);
+    DibDc output(dest);
+    memset(g_mem + out, 0, dest.size); // Deterministic packed bits and DWORD padding.
+    for (uint32_t scan = 0; scan < count; ++scan) {
+        uint32_t y = top ? start + scan : rows - 1 - start - scan;
+        for (int32_t x = 0; x < dest.width; ++x)
+            write_pixel(output.dc, x, top ? scan : count - 1 - scan,
+                        image.pixels[size_t(y) * image.width + x]);
+    }
+    return count;
+}
 void set_dibits(X86 *c) {
     auto *dest = dib_of(arg(c, 1));
     Dib src;

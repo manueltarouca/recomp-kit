@@ -330,6 +330,129 @@ static void test_drawing() {
     call_import(&c, "USER32.dll", "ReleaseDC", {hwnd, dc});
     call_import(&c, "USER32.dll", "DestroyWindow", {hwnd});
 }
+// GetDIBits owns the requested output stride, not the source's backing stride.
+// A 32-bpp source copied verbatim into a 24-bpp caller buffer corrupts the next
+// allocation; guard both ends and check scan orientation and partial transfers.
+static void test_get_dibits_conversion() {
+    X86 c;
+    loader_init_context(&c);
+    uint32_t s = 0x00309000, bmi = s + 256, out = s + 1024;
+    uint32_t dc = call_import(&c, "GDI32.dll", "CreateCompatibleDC", {0});
+    const uint32_t colors[] = {0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff, 0xff112233,
+                               0xff00ffff, 0xffff00ff, 0xffffff00, 0xff000000, 0xff445566};
+    auto header = [&](uint32_t at, int height, unsigned bpp, unsigned compression = 0) {
+        memset(g_mem + at, 0, 64);
+        wr32(at, 40);
+        wr32(at + 4, 5);
+        wr32(at + 8, uint32_t(height));
+        wr16(at + 12, 1);
+        wr16(at + 14, bpp);
+        wr32(at + 16, compression);
+    };
+    for (int source_height : {-2, 2}) {
+        header(s, source_height, 32);
+        uint32_t bitmap =
+            call_import(&c, "GDI32.dll", "CreateDIBSection", {dc, s, 0, s + 128, 0, 0});
+        uint32_t bits = rd32(s + 128);
+        for (unsigned y = 0; y < 2; ++y)
+            for (unsigned x = 0; x < 5; ++x)
+                wr32(bits + ((source_height < 0 ? y : 1 - y) * 5 + x) * 4, colors[y * 5 + x]);
+        for (int height : {-2, 2}) {
+            header(bmi, height, 24);
+            memset(g_mem + out - 4, 0xa5, 64);
+            check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 2, out, bmi, 0}) == 2,
+                  "GetDIBits converts 32 to 24 bpp (%d to %d)", source_height, height);
+            bool pixels = true;
+            for (unsigned y = 0; y < 2; ++y) {
+                for (unsigned x = 0; x < 5; ++x) {
+                    uint32_t expected = colors[(height < 0 ? y : 1 - y) * 5 + x];
+                    for (unsigned b = 0; b < 3; ++b)
+                        pixels &= rd8(out + y * 16 + x * 3 + b) == ((expected >> (b * 8)) & 255);
+                }
+                pixels &= rd8(out + y * 16 + 15) == 0;
+            }
+            check(pixels && rd32(out - 4) == 0xa5a5a5a5 && rd32(out + 32) == 0xa5a5a5a5,
+                  "24-bpp rows have requested orientation, DWORD padding and intact guards");
+            memset(g_mem + out - 4, 0xa5, 64);
+            check(call_import(&c, "GDI32.dll", "GetDIBits",
+                              {dc, bitmap, 1, 0xffffffffu, out, bmi, 0}) == 1 &&
+                      rd8(out) == (colors[(height < 0 ? 1 : 0) * 5] & 255) &&
+                      rd32(out + 16) == 0xa5a5a5a5,
+                  "partial extraction clamps scan count without overwriting the following row");
+        }
+        header(bmi, -2, 16);
+        memset(g_mem + out - 4, 0xa5, 64);
+        check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 2, out, bmi, 0}) == 2 &&
+                  rd16(out) == 0x7c00 && rd16(out + 2) == 0x03e0 && rd16(out + 4) == 0x001f &&
+                  rd32(out - 4) == 0xa5a5a5a5 && rd32(out + 24) == 0xa5a5a5a5,
+              "16-bpp extraction uses RGB555 and its own stride");
+        header(bmi, -2, 16, 3);
+        wr32(bmi + 40, 0xf800);
+        wr32(bmi + 44, 0x07e0);
+        wr32(bmi + 48, 0x001f);
+        check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 2, out, bmi, 0}) == 2 &&
+                  rd16(out) == 0xf800 && rd16(out + 2) == 0x07e0 && rd16(out + 4) == 0x001f,
+              "16-bpp extraction honors explicit RGB565 masks");
+        header(bmi, -2, 24);
+        check(call_import(&c, "GDI32.dll", "GetDIBits",
+                          {dc, bitmap, 0, 2, GUEST_SIZE - 8, bmi, 0}) == 0,
+              "an output extending beyond the guest arena is rejected");
+        wr32(bmi + 16, 1);
+        memset(g_mem + out, 0xa5, 64);
+        check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 2, out, bmi, 0}) == 0 &&
+                  rd32(out) == 0xa5a5a5a5,
+              "unsupported compressed extraction leaves pixel output unchanged");
+        header(bmi, 2, 0);
+        check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 0, 0, bmi, 0}) != 0 &&
+                  rd16(bmi + 14) == 32 && rd32(bmi + 20) == 40,
+              "zero-bit-count query returns the bitmap's native format");
+        header(bmi, -2, 24);
+        check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 0, 0, bmi, 0}) != 0 &&
+                  rd16(bmi + 14) == 24 && int32_t(rd32(bmi + 8)) == -2 && rd32(bmi + 20) == 32,
+              "format query keeps the requested bit count and reports converted size");
+        check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 0, 0, 0, 0}) == 0,
+              "a null bitmap-info pointer is rejected");
+        header(bmi, -2, 32);
+        check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 2, bits, bmi, 0}) == 2 &&
+                  rd32(bits) == colors[0] && rd32(bits + 20) == colors[5],
+              "overlapping native-format extraction snapshots rows before reversing them");
+        call_import(&c, "GDI32.dll", "DeleteObject", {bitmap});
+    }
+    // The real failure requested a 111x60 RGB565 DIB from a 32-bpp bitmap.
+    header(s, 60, 32);
+    wr32(s + 4, 111);
+    uint32_t bitmap = call_import(&c, "GDI32.dll", "CreateDIBSection", {dc, s, 0, s + 128, 0, 0});
+    uint32_t bits = rd32(s + 128);
+    for (unsigned i = 0; i < 111 * 60; ++i)
+        wr32(bits + 4 * i, 0xff040404);
+    uint32_t buffer = heap_alloc(111 * 60 * 4 + 16);
+    memset(g_mem + buffer, 0xa5, 111 * 60 * 4 + 16);
+    header(bmi, 60, 16, 3);
+    wr32(bmi + 4, 111);
+    wr32(bmi + 40, 0xf800);
+    wr32(bmi + 44, 0x07e0);
+    wr32(bmi + 48, 0x001f);
+    check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 60, buffer, bmi, 0}) == 60 &&
+              rd32(bmi + 20) == 224 * 60 && rd16(buffer) == 0x0020 &&
+              rd32(buffer + 224 * 60) == 0xa5a5a5a5,
+          "RGB565 extraction preserves the buffer after 60 requested 224-byte scans");
+    heap_free(buffer);
+    call_import(&c, "GDI32.dll", "DeleteObject", {bitmap});
+    header(s, -2, 32, 3);
+    wr32(s + 40, 0x000000ff);
+    wr32(s + 44, 0x0000ff00);
+    wr32(s + 48, 0x00ff0000);
+    bitmap = call_import(&c, "GDI32.dll", "CreateDIBSection", {dc, s, 0, s + 128, 0, 0});
+    bits = rd32(s + 128);
+    wr32(bits, 0x000000ff);
+    header(bmi, -2, 24);
+    check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 1, out, bmi, 0}) == 1 &&
+              rd8(out) == 0 && rd8(out + 2) == 255,
+          "conversion decodes nonstandard 32-bit source channel masks");
+    call_import(&c, "GDI32.dll", "DeleteObject", {bitmap});
+    call_import(&c, "GDI32.dll", "DeleteDC", {dc});
+}
+
 static void test_dib_rows_and_regions() {
     X86 c;
     loader_init_context(&c);
@@ -1147,6 +1270,7 @@ int main(int argc, char **argv) {
         test_layered_window();
         test_msimg32();
         test_dib_rows_and_regions();
+        test_get_dibits_conversion();
         test_static_control();
         test_clip_children();
         test_draw_theme_parent_background();

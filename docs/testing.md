@@ -89,6 +89,12 @@ translator. It checks that argument cleanup returns to a callable continuation
 exactly once, even with an interior entry that has a different stack contract;
 that interior entry must still dispatch its ordinary computed branch.
 
+`gdi_tests` checks GetDIBits conversion to 16/24/32-bit rows, RGB565 masks,
+orientation, partial scans, overlapping output and surrounding buffer guards.
+A 111x60 RGB565 request exercises the heap-corruption failure where a 32-bit
+backing stride wrote beyond the caller's 224-byte rows. Native indexed extraction
+retains its palette; conversion to another indexed depth remains unsupported.
+
 `vector_tests` pins MXCSR rounding, conversion exception status and integer
 indefinite values (including FISTTP) against architectural constants. The
 synthetic instruction differential suite also covers packed/scalar SSE1,
