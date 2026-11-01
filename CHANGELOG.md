@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Embed the game's core mods in Windows/Linux smoke and headless hosts, as
+  the desktop app does, so shared app resources cannot leave diagnostics
+  loading manifests without their plugin implementations.
+
 - Honor GetDIBits' requested pixel depth, bitfield masks, row orientation and
   padded stride instead of copying the source bitmap's backing rows. Check
   output bounds and partial scans before writes, preserving adjacent guest data.

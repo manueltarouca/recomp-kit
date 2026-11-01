@@ -233,6 +233,14 @@ if(TARGET recomp_gen)
     add_dependencies(pop_smoke smoke_probe)
   endif()
 
+  if(NOT APPLE AND NOT EMSCRIPTEN)
+    # The desktop app installs resources/ manifests for embedded core mods.
+    # Diagnostics share that resource tree, so they must carry the same
+    # implementations rather than search it for absent dynamic libraries.
+    pop_builtin_mods(pop_headless)
+    pop_builtin_mods(pop_smoke)
+  endif()
+
   endif()
 
   pop_host(recomp_app GEN UI_LAYER OPT 2
