@@ -89,6 +89,18 @@ pop_test_binary(scheduler_tests)
 add_test(NAME scheduler_tests COMMAND scheduler_tests WORKING_DIRECTORY ${POP_ROOT})
 set_tests_properties(scheduler_tests PROPERTIES LABELS nogame TIMEOUT 30)
 add_executable(vector_tests tests/vector_tests.cpp tests/stub_recomp_call.cpp)
+set(POP_RETURN_JUMP_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/generated/return_jump_fixture.c)
+add_custom_command(OUTPUT ${POP_RETURN_JUMP_FIXTURE}
+  COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/runtime/tests/make_return_jump_fixture.py ${POP_RETURN_JUMP_FIXTURE}
+  DEPENDS ${POP_ROOT}/runtime/tests/make_return_jump_fixture.py ${POP_ROOT}/tools/recomp/translate.py
+  VERBATIM)
+add_executable(return_jump_tests tests/return_jump_tests.cpp ${POP_RETURN_JUMP_FIXTURE})
+target_link_libraries(return_jump_tests PRIVATE recomp_platform recomp_runtime_testing)
+target_compile_options(return_jump_tests PRIVATE ${POP_WARN_HOST})
+pop_optimize(return_jump_tests 1)
+pop_test_binary(return_jump_tests)
+add_test(NAME return_jump_tests COMMAND return_jump_tests WORKING_DIRECTORY ${POP_ROOT})
+set_tests_properties(return_jump_tests PROPERTIES LABELS nogame TIMEOUT 30)
 set(POP_MSVC_EH_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/generated/msvc_eh_fixture.c)
 add_custom_command(OUTPUT ${POP_MSVC_EH_FIXTURE}
   COMMAND ${Python3_EXECUTABLE} ${POP_ROOT}/runtime/tests/make_msvc_eh_fixture.py ${POP_MSVC_EH_FIXTURE}

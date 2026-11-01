@@ -806,6 +806,26 @@ def test_popped_return_register_is_classified_statically(code, is_return):
     assert ("recomp_jump(c, t_);" in text) != is_return
 
 
+def test_interior_entry_does_not_erase_primary_variadic_return():
+    from test_translate_insns import Opts
+    entry = 0x00601000
+    # Local slot, saved argument count, interior entry, then dynamic cleanup.
+    raw = bytes.fromhex("83 ec 04 52 90 5a 58 58 8d 24 94 ff e0")
+    img = synthetic_image({entry: raw}, base=0x00600000)
+    img.md.detail = True
+    fn = T.Function(entry, "variadic", len(raw),
+                    [img.to_insn(ci) for ci in img.md.disasm(raw, entry)])
+    fn.measure(img)
+    tr = T.Translator(img, {entry, entry + 4}, Opts())
+    tr.prepare(fn)
+    text = "\n".join(tr.translate(fn, (entry + 4,)))
+    assert not fn.return_jumps  # The alternate has a different stack contract.
+    assert fn.primary_return_jumps == {len(fn.insns) - 1}
+    guard = "if (entry_ == 0u) { c->eip = c->r[0]; recomp_return(c); return; }"
+    assert guard in text
+    assert text.index(guard) < text.index("recomp_jump(c, t_)")
+
+
 def test_popped_return_avoids_dispatch_when_continuation_is_also_an_entry(tmp_path, monkeypatch):
     import struct
     entry, done, helper = 0x00601000, 0x00601020, 0x00601060

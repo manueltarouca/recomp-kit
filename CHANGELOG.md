@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve proven popped returns at a function's ordinary entry when an
+  interior entry has a different stack contract, avoiding duplicate execution
+  of callable continuations after variadic argument cleanup.
+
 - Route host close requests to the visible game form, following visible
   owners past modal dialogs and skipping hidden helpers, child windows and
   tool/nonactivating windows. Keep the first-window fallback when no form is visible.

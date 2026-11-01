@@ -3094,6 +3094,13 @@ class Translator(object):
             self.stale_entries.update(dropped)
             entries = [e for e in entries if e in fn.index]
         fn.return_jumps = self.popped_return_jumps(fn, entries)
+        # Interior entries have independent stack contracts. A speculative
+        # entry can erase the shared proof without invalidating the ordinary
+        # entry's return slot (notably a variadic POP/LEA ESP/JMP epilogue).
+        # Keep that proof behind the body's entry selector; alternate callers
+        # retain their existing computed-branch semantics.
+        fn.primary_return_jumps = (self.popped_return_jumps(fn, ()) - fn.return_jumps
+                                   if entries else set())
         fn.seh_escapes = self.seh_escaping_returns(fn)
         if self.opts.eager_flags:
             live_out = [ALL_FLAGS] * len(fn.insns)
@@ -4052,7 +4059,13 @@ class Translator(object):
             # a genuine return as cheap as it was and dispatches the rest.
             return orphan + ["c->eip = %s; recomp_return(c); return;" % read_op(op, 32)]
         targets = self.jumptables.get((fn.addr, ins.addr))
-        L = ["uint32_t t_ = %s;" % read_op(op, 32)]
+        L = []
+        if i in getattr(fn, "primary_return_jumps", ()):
+            self.stats["_jmp_primary_popped_return"] += 1
+            orphan = "recomp_seh_frame_orphan(c, seh_mark_); " if i in fn.seh_escapes else ""
+            L.append("if (entry_ == 0u) { c->eip = %s; %srecomp_return(c); return; }"
+                     % (read_op(op, 32), orphan))
+        L.append("uint32_t t_ = %s;" % read_op(op, 32))
         if not targets:
             # A table-less jump may enter any instruction of this body. Keep
             # that transfer in the current host frame; nonlocal targets and
