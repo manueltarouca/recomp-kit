@@ -1818,7 +1818,7 @@ uint32_t get_dibits(X86 *c) {
     const uint32_t rows = uint32_t(std::abs(int64_t(source->height)));
     if (!out && !rd16(bmi + 14)) {
         wr32(bmi + 4, uint32_t(source->width));
-        wr32(bmi + 8, uint32_t(source->height));
+        wr32(bmi + 8, rows); // Native attribute queries report a positive height.
         wr16(bmi + 12, 1);
         wr16(bmi + 14, source->bpp);
         wr32(bmi + 16, source->compression);

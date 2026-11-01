@@ -404,7 +404,7 @@ static void test_get_dibits_conversion() {
               "unsupported compressed extraction leaves pixel output unchanged");
         header(bmi, 2, 0);
         check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 0, 0, bmi, 0}) != 0 &&
-                  rd16(bmi + 14) == 32 && rd32(bmi + 20) == 40,
+                  rd16(bmi + 14) == 32 && rd32(bmi + 8) == 2 && rd32(bmi + 20) == 40,
               "zero-bit-count query returns the bitmap's native format");
         header(bmi, -2, 24);
         check(call_import(&c, "GDI32.dll", "GetDIBits", {dc, bitmap, 0, 0, 0, bmi, 0}) != 0 &&
