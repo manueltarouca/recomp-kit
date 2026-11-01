@@ -735,6 +735,24 @@ for _name, _op in (("ADDPS","58"),("SUBPS","5c"),("MULPS","59"),("DIVPS","5e"),
                     ("MINPS","5d"),("MAXPS","5f")):
     CASES.append(_decoded_case(_name + " register alias", "0f1006 0f104e10 0f"+_op+"c1 0f1107 c3",
                               lambda rng, special=_name in ("MINPS","MAXPS"): _sse_setup(rng,special=special)))
+def _sse_nan_setup(rng):
+    # Both operands and the output use distinct storage. Include invalid
+    # finite/infinite pairs and non-default NaN payloads/signs in the oracle.
+    choices = [0, 0x80000000, 0x3f800000, 0x7f800000, 0xff800000,
+               0x7fc01234, 0xffc05678]
+    left = [rng.choice(choices) for _ in range(4)]
+    # Two NaNs have host/oracle-specific payload precedence, independent of
+    # the invalid-operation result checked here. Keep at most one per lane.
+    right = [rng.choice(choices[:5] if (a & 0x7fffffff) > 0x7f800000 else choices) for a in left]
+    return {"regs": dict(rand_regs(rng), ESI=SCRATCH+0x300, EDI=SCRATCH+0x100),
+            "mem": [(SCRATCH+0x300, struct.pack("<8I", *(left + right)))]}
+
+
+for _name, _op in (("ADDPS","58"),("SUBPS","5c"),("MULPS","59"),("DIVPS","5e")):
+    CASES.append(_decoded_case(_name + " invalid and NaN payloads",
+                              "0f1006 0f104e10 0f"+_op+"c1 0f1107 c3", _sse_nan_setup))
+
+
 for _name, _prefix, _op in (("SQRTPS","","51"),("RSQRTPS","","52"),("RCPPS","","53"),
                              ("RSQRTSS","f3","52"),("RCPSS","f3","53")):
     CASES.append(_decoded_case(_name, "0f1006 0f104e10 "+_prefix+"0f"+_op+"c1 0f1107 c3",

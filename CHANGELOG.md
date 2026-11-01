@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Preserve x86 indefinite NaN bits for invalid packed SSE arithmetic on ARM
+  hosts, leaving operand NaN propagation unchanged.
+
 - Accept Windows CRLF line endings in smoke scripts, including blank lines
   and a final line without LF, while retaining strict numeric parsing.
 

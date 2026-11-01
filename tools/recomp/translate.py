@@ -4248,7 +4248,9 @@ class Translator(object):
                 result = ("1.0f / " if m.startswith("RSQRT") else "") + "recomp_sse_sqrtf(b%d_)" % i
             else:
                 result = "1.0f / b%d_" % i
-            L.append("c->xmm[%d][%d] = sse_float_bits(%s);" % (dst.reg,i,result))
+            bits = ("sse_arithmetic_bits(a%d_, b%d_, %s)" % (i,i,result)
+                    if m in math_ops else "sse_float_bits(%s)" % result)
+            L.append("c->xmm[%d][%d] = %s;" % (dst.reg,i,bits))
         return L
 
     def emit_x87(self, fn, ins, m, ops):

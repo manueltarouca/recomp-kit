@@ -382,6 +382,18 @@ static inline uint32_t sse_float_bits(float value) {
     memcpy(&bits, &value, 4);
     return bits;
 }
+/* Invalid packed arithmetic returns x86's negative indefinite NaN even on
+ * hosts that generate a positive default NaN. Leave propagation of operand
+ * NaNs alone; only operations on non-NaN operands generate indefinite.
+ * Return bits so the compiler cannot choose a host NaN representation. */
+static inline uint32_t sse_arithmetic_bits(float left, float right, float result) {
+    const uint32_t a = sse_float_bits(left), b = sse_float_bits(right);
+    const uint32_t bits = sse_float_bits(result);
+    if ((a & 0x7fffffffu) <= 0x7f800000u && (b & 0x7fffffffu) <= 0x7f800000u &&
+        (bits & 0x7fffffffu) > 0x7f800000u)
+        return 0xffc00000u;
+    return bits;
+}
 static inline double sse_double(uint64_t bits) {
     double value;
     memcpy(&value, &bits, 8);

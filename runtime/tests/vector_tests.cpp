@@ -15,6 +15,15 @@ static int checks, failures;
         }                                                                                          \
     } while (0)
 int main() {
+    // Model an ARM-generated positive NaN independently of the host CPU.
+    const float positive_nan = sse_float(0x7fc00000u);
+    CHECK(sse_arithmetic_bits(0.0f, -0.0f, positive_nan) == 0xffc00000u);
+    CHECK(sse_arithmetic_bits(sse_float(0x7f800000u), sse_float(0x7f800000u), positive_nan) ==
+          0xffc00000u);
+    CHECK(sse_arithmetic_bits(sse_float(0x7fc01234u), 1.0f, sse_float(0x7fc01234u)) == 0x7fc01234u);
+    CHECK(sse_arithmetic_bits(1.0f, sse_float(0xff801234u), sse_float(0xffc01234u)) == 0xffc01234u);
+    CHECK(sse_arithmetic_bits(1.0f, 2.0f, 0.5f) == 0x3f000000u);
+    CHECK(sse_arithmetic_bits(-0.0f, 1.0f, -0.0f) == 0x80000000u);
     X86 c{};
     CHECK(sse_mxcsr(&c) == 0x1f80);
     const int32_t positive[] = {2, 1, 2, 1}, negative[] = {-2, -2, -1, -1};
