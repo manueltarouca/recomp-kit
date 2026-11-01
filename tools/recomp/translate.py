@@ -6056,7 +6056,7 @@ def main():
     # orphan whoever called it, so this repeats until it settles.  Blocks that
     # came from Ghidra's listing are never dropped - a dangling target there is
     # a translator gap, and the invariant below turns it into a build failure.
-    fn_ref = re.compile(r"FN\(([0-9a-f]{8})\)")
+    fn_ref = re.compile(r"FN2?\(([0-9a-f]{8})\)")
 
     def dangling_targets(body, known):
         """Literal dispatch targets in this body that are not entry points.

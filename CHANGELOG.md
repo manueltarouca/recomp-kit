@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Validate two-parameter tail-call references during speculative-block
+  withdrawal and the final translation gate, so missing targets are handled
+  before native compilation.
+
 - Preserve proven popped returns at a function's ordinary entry when an
   interior entry has a different stack contract, avoiding duplicate execution
   of callable continuations after variadic argument cleanup.

@@ -13,6 +13,24 @@ sys.path.insert(0, os.path.join(ROOT, "tools/recomp"))
 import translate as T  # noqa: E402
 
 
+@pytest.mark.parametrize("macro", ["CALL_FN", "TAIL_FN", "TAIL_FN2"])
+def test_literal_transfer_gate_covers_each_call_macro(tmp_path, monkeypatch, macro):
+    entry, missing = 0x00601000, 0x00601800
+    img = synthetic_image({entry: b"\xc3"}, base=0x00600000)
+    img.code_pointers = lambda *a, **kw: (set(), set())
+    translate = T.Translator.translate
+
+    def emitted_transfer(self, fn, entries=()):
+        body = translate(self, fn, entries)
+        # Model a target lost after emission, before the pruning/gate pass.
+        body.insert(-1, "    %s(%08x); return;" % (macro, missing))
+        return body
+
+    monkeypatch.setattr(T.Translator, "translate", emitted_transfer)
+    with pytest.raises(T.TranslateError, match="literal dispatch targets are not entry points"):
+        translate_entry_fixture(tmp_path, monkeypatch, img, {entry: b"\xc3"})
+
+
 def test_a_withdrawn_block_leaves_a_trap_where_it_was_dispatched_to():
     """A function whose listing ends on a call that never returns (a C++
     throw, `exit`) falls through to padding.  The sweep recovers a block
