@@ -149,6 +149,11 @@
   before entering their message loop. The default remains `"message_loop"`.
   Thread mode preserves periodic cadence, honors pinned time and stops before
   host shutdown. Fixes #16.
+- Translate a jump into another function as a tail call (`TAIL_FN`,
+  `TAIL_FN2`). It was a call followed by `return`, so a guest loop split
+  across two functions grew the host stack once per iteration and overflowed
+  the browser's. The web build forces it with `musttail` and `-mtail-call`;
+  native output keeps a plain call.
 
 - Add a Direct3D 8 frontend with version 8 interfaces and structure layouts,
   FVF and vertex-declaration conversion, vs_1_1/ps_1_1 shader handles, and
