@@ -127,6 +127,29 @@ void host_post_message(uint32_t hwnd, uint32_t msg, uint32_t wparam, uint32_t lp
 uint32_t host_main_window() {
     return g_main_hwnd;
 }
+uint32_t host_close_target() {
+    // A framework's first HWND can be an invisible message helper. Close the
+    // foremost form instead, walking visible owners past modal dialogs so
+    // the application's normal form-shutdown path stops its workers first.
+    auto eligible = [](const Window *w) {
+        return w && w->hwnd != desktop_handle && !w->parent && w->visible && w->w > 0 && w->h > 0 &&
+               !(w->exstyle & 0x08000080u); // WS_EX_NOACTIVATE / WS_EX_TOOLWINDOW
+    };
+    auto order = window_z_order(0);
+    for (auto i = order.rbegin(); i != order.rend(); ++i) {
+        Window *w = find_window(*i);
+        if (!eligible(w))
+            continue;
+        for (size_t n = 0; n < windows().size(); ++n) {
+            Window *owner = find_window(w->owner);
+            if (!eligible(owner) || owner == w)
+                break;
+            w = owner;
+        }
+        return w->hwnd;
+    }
+    return host_main_window();
+}
 uint32_t host_window_proc(uint32_t hwnd) {
     Window *w = find_window(hwnd);
     return w ? w->wndproc : 0;

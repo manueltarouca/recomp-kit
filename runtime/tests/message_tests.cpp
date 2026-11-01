@@ -61,6 +61,29 @@ int main() {
     uint32_t window = call(c, "user32.dll", "CreateWindowExA",
                            {0, scratch + 0x800, 0, 0, 0, 0, 8, 8, 0, 0, IMAGE_BASE, 0});
     CHECK(window != 0);
+    // VCL creates an invisible application window before its actual forms.
+    // Closing that helper bypasses form shutdown while workers still use it.
+    CHECK(host_close_target() == window);
+    auto make = [&](uint32_t ex, uint32_t style, uint32_t owner) {
+        return call(c, "user32.dll", "CreateWindowExA",
+                    {ex, scratch + 0x800, 0, style, 0, 0, 8, 8, owner, 0, IMAGE_BASE, 0});
+    };
+    uint32_t form = make(0, 0x10000000u, window);
+    uint32_t modal = make(0, 0x10000000u, form);
+    uint32_t child = make(0, 0x50000000u, form);
+    uint32_t tool = make(0x80, 0x10000000u, 0);
+    uint32_t overlay = make(0x08000000u, 0x10000000u, 0);
+    CHECK(form && modal && child && tool && overlay);
+    CHECK(host_main_window() == window);
+    CHECK(host_close_target() == form); // modal -> visible owner; child/tool ignored
+    call(c, "user32.dll", "ShowWindow", {form, 0});
+    CHECK(host_close_target() == modal); // do not follow a hidden owner
+    call(c, "user32.dll", "ShowWindow", {modal, 0});
+    CHECK(host_close_target() == window); // no visible form: retain existing fallback
+    call(c, "user32.dll", "DestroyWindow", {tool});
+    call(c, "user32.dll", "DestroyWindow", {overlay});
+    call(c, "user32.dll", "DestroyWindow", {form}); // also removes child and modal
+    CHECK(host_close_target() == window);
     // No helper may consume a key posted to the main thread's window.
     call(c, "user32.dll", "PostMessageA", {window, 0x100, 13, 0});
     ready = call(c, "kernel32.dll", "CreateEventA", {0, 0, 0, 0});

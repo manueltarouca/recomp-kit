@@ -698,7 +698,7 @@ void boot_request_close(const char *reason) {
         g_stop_reason = reason;
     // The caller says why in its own words; boot only delivers the message,
     // which is the one thing closing a real window does.
-    uint32_t hwnd = host_main_window();
+    uint32_t hwnd = host_close_target();
     if (hwnd)
         host_post_message(hwnd, 0x0010 /* WM_CLOSE */, 0, 0);
 }

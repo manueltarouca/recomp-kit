@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Route host close requests to the visible game form, following visible
+  owners past modal dialogs and skipping hidden helpers, child windows and
+  tool/nonactivating windows. Keep the first-window fallback when no form is visible.
+
 - Preserve x86 indefinite NaN bits for invalid packed SSE arithmetic on ARM
   hosts, leaving operand NaN propagation unchanged.
 
