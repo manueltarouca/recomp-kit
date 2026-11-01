@@ -49,15 +49,18 @@ int main() {
     }
     // The interior entry lacks the prologue. Its popped destination is not
     // proven to be its caller's return; it must still dispatch an ordinary jump.
-    X86 cpu = {};
-    cpu.r[R_ESP] = stack;
-    wr32(stack, 2); // Saved argument count.
-    wr32(stack + 4, 0);
-    wr32(stack + 8, branch);
-    transfers = 0;
-    fn_0d02b004(&cpu);
-    CHECK(transfers == 1 && cpu.r[R_ESI] == 1 && cpu.eip == branch);
-    CHECK(cpu.r[R_ESP] == stack + 20);
+    const uint32_t destinations[] = {branch, continuation};
+    for (uint32_t target : destinations) {
+        X86 cpu = {};
+        cpu.r[R_ESP] = stack;
+        wr32(stack, 2); // Saved argument count.
+        wr32(stack + 4, 0);
+        wr32(stack + 8, target);
+        transfers = 0;
+        fn_0d02b004(&cpu);
+        CHECK(transfers == 1 && cpu.r[R_ESI] == 1 && cpu.eip == target);
+        CHECK(cpu.r[R_ESP] == stack + 20);
+    }
     mem_shutdown();
     std::printf("Return jumps: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
