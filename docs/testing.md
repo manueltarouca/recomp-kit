@@ -1,5 +1,11 @@
 # Testing
 
+Windows/Linux diagnostic hosts embed the same game core mods as the app.
+When validating a real port, check that its required core mod is reported as
+loaded; a completed input script can otherwise hide a rejected plugin and
+exercise different settings or hooks. NFS Most Wanted's Windows regression
+reproduced this when app resources contained core manifests but no dynamic DLL.
+
 `openal_tests` captures mixer calls and advances the guest clock to check
 source progress, processed queues, shared-context buffer lifetimes, stable
 pitch/pan, all six distance models, format/rate refusal, null upload bounds,
